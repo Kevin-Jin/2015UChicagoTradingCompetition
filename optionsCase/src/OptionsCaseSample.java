@@ -13,6 +13,14 @@ import org.uchicago.options.core.OptionsInterface;
 import com.optionscity.freeway.api.IDB;
 import com.optionscity.freeway.api.IJobSetup;
 
+/**
+ * 
+ *
+ * @author Nathan Ro
+ * @author Embert Lin
+ * @author Kevin Jin
+ * @author Shrey Patel
+ */
 public class OptionsCaseSample extends AbstractOptionsCase implements OptionsInterface {
 	private static final NumberFormat FMT = new DecimalFormat("0.00");
 
@@ -60,11 +68,17 @@ public class OptionsCaseSample extends AbstractOptionsCase implements OptionsInt
 	/**
 	 * Magnify or reduce the effect of unfilled ticks and options risk on our bid:ask spread.
 	 */
-	private static final double OPTIMAL_SPREAD_FACTOR = 0.2;
+	private static final double SPREAD_FACTOR = 0.2;
 	/**
 	 * Higher -> spread decreases faster on higher inventory.
 	 */
 	private static final double VEGA_POWER = 1;
+	/**
+	 * We don't bother with vega in our spread calculation unless vega is greater
+	 * than 1. Otherwise, spread goes to infinity when we have no inventory.
+	 * Increase this value to start selling off faster as inventory grows.
+	 */
+	private static final double VEGA_CLAMP = 1;
 
 	private static class ClearingMeasure {
 		public int value;
@@ -138,13 +152,13 @@ public class OptionsCaseSample extends AbstractOptionsCase implements OptionsInt
 				negativeInventory.add(new LinkedList<Double>());
 				mostRecentPrice[i] = OptionsMathUtils.theoValue(getStrike(i), INITIAL_VOLATILITY);
 				mostRecentSpread[i] = INITIAL_SPREAD;
+				bidWeightForSpreadVelocity[i] = 0;
 				bidWeightForSpread[i] = 0.5;
 				bid[i] = mostRecentPrice[i] - mostRecentSpread[i] * bidWeightForSpread[i];
-				ask[i] = mostRecentPrice[i] + mostRecentSpread[i] * bidWeightForSpread[i];
-				bidWeightForSpreadVelocity[i] = 0;
+				ask[i] = mostRecentPrice[i] + mostRecentSpread[i] * (1 - bidWeightForSpread[i]);
 				clearingMeasure[i] = new ClearingMeasure();
 			}
-			pnl = positionVega = penalties = 0;
+			penaltyDollars = pnl = positionVega = penalties = 0;
 		}
 	}
 
@@ -234,22 +248,20 @@ public class OptionsCaseSample extends AbstractOptionsCase implements OptionsInt
 	}
 
 	private double calculateSpread(double vol, int strike) {
-		return Math.max(MIN_SPREAD, Math.min(
-			MAX_SPREAD,
+		return Math.max(MIN_SPREAD, Math.min(MAX_SPREAD,
 			//normal spread
-			OPTIMAL_SPREAD_FACTOR
+			SPREAD_FACTOR
 			//hitting too many bids and lifting too many asks means we could profit more and we need to make our options less attractive
 			* Math.max(1, clearingMeasure[getAsset(strike)].value)
 			//higher risk on individual options means we need to increase spread
 			* calculateOptionRisk(vol, strike)
 			//higher risk on position means we need to decrease spread and unload FAST (weight this more heavily)
-			/ (Math.pow(Math.max(1, positionVega), VEGA_POWER))
+			/ (Math.pow(Math.max(VEGA_CLAMP, positionVega), VEGA_POWER))
 		));
 	}
 
 	private double calculateSpreadBidWeightVelocity(int inventoryCount) {
-		return Math.max(-MAX_WEIGHT_VELOCITY_MAGNITUDE, Math.min(
-			MAX_WEIGHT_VELOCITY_MAGNITUDE,
+		return Math.max(-MAX_WEIGHT_VELOCITY_MAGNITUDE, Math.min(MAX_WEIGHT_VELOCITY_MAGNITUDE,
 			//too many market sell orders clearing (positive inventory) --> we're buying too much too expensively --> decrease bid (buy less) and ask (sell more) --> increase bidWeightForSpread
 			//too many market buy orders clearing (negative inventory) --> we're selling too much too cheaply --> increase bid (buy more) and ask (sell less) --> decrease bidWeightForSpread
 			MARGINAL_WEIGHT_VELOCITY_FOR_INVENTORY * inventoryCount
@@ -267,7 +279,9 @@ public class OptionsCaseSample extends AbstractOptionsCase implements OptionsInt
 			bidWeightForSpread[asset] = 0.5;
 
 		//add velocity to the current spread
-		bidWeightForSpread[asset] = Math.min(0.5 - MAX_WEIGHT_DEVIATION, Math.max(0.5 + MAX_WEIGHT_DEVIATION, bidWeightForSpread[asset] + bidWeightForSpreadVelocity[asset]));
+		bidWeightForSpread[asset] = Math.max(0.5 - MAX_WEIGHT_DEVIATION, Math.min(0.5 + MAX_WEIGHT_DEVIATION,
+			bidWeightForSpread[asset] + bidWeightForSpreadVelocity[asset])
+		);
 	}
 
 	private void updatePositionVega(double sigma) {
@@ -301,7 +315,7 @@ public class OptionsCaseSample extends AbstractOptionsCase implements OptionsInt
 		double spread = calculateSpread(sigma, strike);
 		this.mostRecentPrice[asset] = price;
 		this.mostRecentSpread[asset] = spread;
-		log("Order cleared, price=" + FMT.format(price) + ", strike=" + strike + ", direction=" + side + "." + "SIGMA: " + FMT.format(sigma) + ", SIGMA ESTIMATION PRICE ERROR: " + FMT.format(sigmaEstimationError(strike, sigma, price)) + ", SPREAD: " + FMT.format(spread));
+		log("Order cleared, price=" + FMT.format(price) + ", strike=" + strike + ", direction=" + side + ". " + "SIGMA: " + FMT.format(sigma) + ", SIGMA ESTIMATION PRICE ERROR: " + FMT.format(sigmaEstimationError(strike, sigma, price)) + ", SPREAD: " + FMT.format(spread));
 
 		//calculate a rolling PnL
 		//FIFO basis
@@ -366,6 +380,7 @@ public class OptionsCaseSample extends AbstractOptionsCase implements OptionsInt
 			updateSpreadBidWeight(i);
 			updateBidAndAsk(i);
 		}
+		//sigma and inventory don't change, no need to update position vega
 		updatePenalties();
 
 		printSummary();
