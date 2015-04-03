@@ -1,4 +1,7 @@
+import java.text.DecimalFormat;
+import java.text.NumberFormat;
 import java.util.ArrayList;
+import java.util.LinkedList;
 import java.util.List;
 
 import org.uchicago.options.OptionsHelpers.Quote;
@@ -11,29 +14,100 @@ import com.optionscity.freeway.api.IDB;
 import com.optionscity.freeway.api.IJobSetup;
 
 public class OptionsCaseSample extends AbstractOptionsCase implements OptionsInterface {
-	//some constants
+	private static final NumberFormat FMT = new DecimalFormat("0.00");
+
+	//some constants, defined by the case
 	private static final int NUMBER_STRIKES = 5;
 	private static final double VEGA_LIMIT = 5 * OptionsMathUtils.calculateVega(100, 0.3);
 	//some parameters
-	private static final double EPSILON_FOR_SIGMA = 1e-14;
-	private static final double OPTIMAL_SPREAD_FACTOR = 20;
-	private static final double OPTIMAL_VEGA = VEGA_LIMIT / 2;
-	private static final double MARGINAL_WEIGHT_FOR_INVENTORY = 0.05;
-	private static final double MARGINAL_SPREAD_FOR_VEGA_DIFF = 10;
-	private static final double MARGINAL_SPREAD_FOR_VOLUME = 0.05;
+	/**
+	 * Used to determine our short run hit/lift rate that affects our spread.
+	 */
+	private static final int NUMBER_TICKS_TO_TRACK = 3;
+	/**
+	 * Maximum error we'll take in our bisection estimation for sigma.
+	 */
+	private static final double EPSILON_FOR_SIGMA = 1e-15;
+	/**
+	 * The first quotes will use this volatility.
+	 */
+	private static final double INITIAL_VOLATILITY = 0.3;
+	/**
+	 * The first quotes will use this bid:ask spread.
+	 */
+	private static final double INITIAL_SPREAD = 1;
+	/**
+	 * Higher excess short or long inventory -> higher velocity on bid-weight to incentivize brokers to trade with us in the opposite direction.
+	 */
+	private static final double MARGINAL_WEIGHT_VELOCITY_FOR_INVENTORY = 0.05;
+	/**
+	 * Bid-weight can decrease or increase by a maximum of 0.5 every tick.
+	 */
+	private static final double MAX_WEIGHT_VELOCITY_MAGNITUDE = 0.5;
+	/**
+	 * > 1 means ask can fall below FV and bid can rise above FV.
+	 * = 0 means bid must be FV - 0.5 * spread and ask must be FV + 0.5 * spread.
+	 */
+	private static final double MAX_WEIGHT_DEVIATION = 2;
+	/**
+	 * Lower -> profit may decrease but more trades should clear.
+	 */
+	private static final double MIN_SPREAD = 0.1;
+	/**
+	 * Higher -> profit may increase but fewer trades should clear.
+	 */
+	private static final double MAX_SPREAD = 10;
+	/**
+	 * Magnify or reduce the effect of unfilled ticks and options risk on our bid:ask spread.
+	 */
+	private static final double OPTIMAL_SPREAD_FACTOR = 0.2;
+	/**
+	 * Higher -> spread decreases faster on higher inventory.
+	 */
+	private static final double VEGA_POWER = 1;
+
+	private static class ClearingMeasure {
+		public int value;
+		private boolean[] distribution = new boolean[NUMBER_TICKS_TO_TRACK];
+		private int clearedIndex;
+
+		public ClearingMeasure() {
+			clear();
+		}
+
+		public void clear() {
+			value = 0;
+			for (int i = 0; i < NUMBER_TICKS_TO_TRACK; i++)
+				distribution[i] = false;
+			clearedIndex = 0;
+		}
+
+		private void updateClearedMeasure(boolean isCleared) {
+			boolean existing = distribution[clearedIndex];
+			if (existing != isCleared) {
+				value += (isCleared ? 1 : -1);
+				distribution[clearedIndex] = isCleared;
+				if (value < 0 || value > NUMBER_TICKS_TO_TRACK)
+					throw new RuntimeException("Clearing measure wrong");
+			}
+			clearedIndex = (clearedIndex + 1) % distribution.length;
+		}
+	}
 
 	// private IDB myDatabase;
 
 	private double pnl;
 	private int penalties;
-	private int totalTicks;
-	private double vega;
+	private double penaltyDollars;
+	private double positionVega;
 
+	private ClearingMeasure[] clearingMeasure = new ClearingMeasure[NUMBER_STRIKES];
+	private final double[] bidWeightForSpreadVelocity = new double[NUMBER_STRIKES];
 	private final double[] bidWeightForSpread = new double[NUMBER_STRIKES];
-	private final double[] spreadFactor = new double[NUMBER_STRIKES]; //multiply with sigma to get spread
 	private final double[] bid = new double[NUMBER_STRIKES];
 	private final double[] ask = new double[NUMBER_STRIKES];
-	private final double[] volume = new double[NUMBER_STRIKES];
+	private final double[] mostRecentPrice = new double[NUMBER_STRIKES];
+	private final double[] mostRecentSpread = new double[NUMBER_STRIKES];
 
 	//negativeInventory.get(i).size() > positiveInventory.get(i).size() --> we're short on asset i, i.e. negative inventory
 	private final List<List<Double>> positiveInventory = new ArrayList<List<Double>>();
@@ -59,15 +133,18 @@ public class OptionsCaseSample extends AbstractOptionsCase implements OptionsInt
 			// do strategy one
 			positiveInventory.clear();
 			negativeInventory.clear();
-			for (int asset = 0; asset < NUMBER_STRIKES; asset++) {
-				positiveInventory.add(new ArrayList<Double>());
-				negativeInventory.add(new ArrayList<Double>());
-				bid[asset] = OptionsMathUtils.theoValue(100, 0.3) - 1;
-				ask[asset] = OptionsMathUtils.theoValue(100, 0.3) + 1;
-				spreadFactor[asset] = OPTIMAL_SPREAD_FACTOR;
-				bidWeightForSpread[asset] = 0.5;
+			for (int i = 0; i < NUMBER_STRIKES; i++) {
+				positiveInventory.add(new LinkedList<Double>());
+				negativeInventory.add(new LinkedList<Double>());
+				mostRecentPrice[i] = OptionsMathUtils.theoValue(getStrike(i), INITIAL_VOLATILITY);
+				mostRecentSpread[i] = INITIAL_SPREAD;
+				bidWeightForSpread[i] = 0.5;
+				bid[i] = mostRecentPrice[i] - mostRecentSpread[i] * bidWeightForSpread[i];
+				ask[i] = mostRecentPrice[i] + mostRecentSpread[i] * bidWeightForSpread[i];
+				bidWeightForSpreadVelocity[i] = 0;
+				clearingMeasure[i] = new ClearingMeasure();
 			}
-			pnl = vega = penalties = 0;
+			pnl = positionVega = penalties = 0;
 		}
 	}
 
@@ -94,15 +171,15 @@ public class OptionsCaseSample extends AbstractOptionsCase implements OptionsInt
 			do {
 				impliedVolMid = (impliedVolLowerBound + impliedVolUpperBound) / 2;
 				priceError = OptionsMathUtils.theoValue(strike, impliedVolMid) - price;
-				if (priceError > 0) {
+				if (impliedVolMid == impliedVolLowerBound || impliedVolMid == impliedVolUpperBound || Math.abs(priceError) < EPSILON_FOR_SIGMA) {
+					//not enough precision, stop
+					impliedVolUpperBound = impliedVolLowerBound = impliedVolMid;
+				} else if (priceError > 0) {
 					//impliedVol too high - decrease it
 					impliedVolUpperBound = impliedVolMid;
 				} else if (priceError < 0) {
 					//impliedVol too low - increase it
 					impliedVolLowerBound = impliedVolMid;
-				} else {
-					//impliedVol exactly correct. exit now
-					impliedVolUpperBound = impliedVolLowerBound = impliedVolMid;
 				}
 			} while (impliedVolUpperBound - impliedVolLowerBound >= EPSILON_FOR_SIGMA);
 			//implied volatility may just be initial lower bound on this iteration, e.g. 0 on first iteration
@@ -120,17 +197,114 @@ public class OptionsCaseSample extends AbstractOptionsCase implements OptionsInt
 		return impliedVolMid;
 	}
 
+	private void printSummary() {
+		String inventory = "";
+		String quotes = "";
+		String fills = "";
+		String bidWeights = "";
+		for (int i = 0; i < NUMBER_STRIKES; i++) {
+			inventory += getStrike(i) + ": " + (positiveInventory.get(i).size() - negativeInventory.get(i).size()) + ", ";
+			quotes += getStrike(i) + ": [bid: " + FMT.format(bid[i]) + ", ask: " + FMT.format(ask[i]) + "], ";
+			fills += getStrike(i) + ": " + clearingMeasure[i].value + ", ";
+			bidWeights += getStrike(i) + ": [now: " + FMT.format(bidWeightForSpread[i]) + ", vel: " + FMT.format(bidWeightForSpreadVelocity[i]) + "], ";
+		}
+		log("PNL : " + FMT.format(pnl));
+		log("Inventory : " + inventory);
+		log("Quotes : " + quotes);
+		log("Bid weights: " + bidWeights);
+		log("Fills in past 10 ticks: " + fills);
+		log("Vega : " + FMT.format(positionVega) + " < " + FMT.format(VEGA_LIMIT) + "? (" + penalties + " penalties so far totaling " + FMT.format(penaltyDollars) + ")");
+	}
+
+	private double calculateOptionRisk(double vol, int strike) {
+		//option vega makes no sense since that implies higher spreads on at the money options,
+		//which are more liquid. so calculate using volatility of underlying times some factor
+		//to correct for the fact that otherwise, spread would be the same for all options
+		//with different strike prices i.e. less liquid/more liquid assets would have same spread
+		double factor;
+		switch (strike) {
+			case 80: factor = 20; break;
+			case 90: factor = 10; break;
+			case 100: factor = 5; break;
+			case 110: factor = 3; break;
+			case 120: factor = 1; break;
+			default: throw new IllegalArgumentException("Strike");
+		}
+		return vol * factor;
+	}
+
+	private double calculateSpread(double vol, int strike) {
+		return Math.max(MIN_SPREAD, Math.min(
+			MAX_SPREAD,
+			//normal spread
+			OPTIMAL_SPREAD_FACTOR
+			//hitting too many bids and lifting too many asks means we could profit more and we need to make our options less attractive
+			* Math.max(1, clearingMeasure[getAsset(strike)].value)
+			//higher risk on individual options means we need to increase spread
+			* calculateOptionRisk(vol, strike)
+			//higher risk on position means we need to decrease spread and unload FAST (weight this more heavily)
+			/ (Math.pow(Math.max(1, positionVega), VEGA_POWER))
+		));
+	}
+
+	private double calculateSpreadBidWeightVelocity(int inventoryCount) {
+		return Math.max(-MAX_WEIGHT_VELOCITY_MAGNITUDE, Math.min(
+			MAX_WEIGHT_VELOCITY_MAGNITUDE,
+			//too many market sell orders clearing (positive inventory) --> we're buying too much too expensively --> decrease bid (buy less) and ask (sell more) --> increase bidWeightForSpread
+			//too many market buy orders clearing (negative inventory) --> we're selling too much too cheaply --> increase bid (buy more) and ask (sell less) --> decrease bidWeightForSpread
+			MARGINAL_WEIGHT_VELOCITY_FOR_INVENTORY * inventoryCount
+		));
+	}
+
+	private void updateSpreadBidWeight(int asset) {
+		bidWeightForSpreadVelocity[asset] = calculateSpreadBidWeightVelocity(positiveInventory.get(asset).size() - negativeInventory.get(asset).size());
+
+		//when velocity switches direction, we want to make sure bidWeight moves to same direction
+		//0.5 is our "normal" distribution of the spread to bid and ask
+		if (bidWeightForSpreadVelocity[asset] < 0 && bidWeightForSpread[asset] > 0.5)
+			bidWeightForSpread[asset] = 0.5;
+		if (bidWeightForSpreadVelocity[asset] > 0 && bidWeightForSpread[asset] < 0.5)
+			bidWeightForSpread[asset] = 0.5;
+
+		//add velocity to the current spread
+		bidWeightForSpread[asset] = Math.min(0.5 - MAX_WEIGHT_DEVIATION, Math.max(0.5 + MAX_WEIGHT_DEVIATION, bidWeightForSpread[asset] + bidWeightForSpreadVelocity[asset]));
+	}
+
+	private void updatePositionVega(double sigma) {
+		positionVega = 0;
+		//sum the option vega of all inventory
+		for (int i = 0; i < NUMBER_STRIKES; i++) {
+			double vegaForStrike = OptionsMathUtils.calculateVega(getStrike(i), sigma);
+			positionVega += positiveInventory.get(i).size() * vegaForStrike;
+			positionVega -= negativeInventory.get(i).size() * vegaForStrike;
+		}
+		positionVega = Math.abs(positionVega);
+	}
+
+	private void updateBidAndAsk(int asset) {
+		bid[asset] = mostRecentPrice[asset] - bidWeightForSpread[asset] * mostRecentSpread[asset];
+		ask[asset] = mostRecentPrice[asset] + (1 - bidWeightForSpread[asset]) * mostRecentSpread[asset];
+	}
+
+	private void updatePenalties() {
+		if (positionVega >= VEGA_LIMIT) {
+			penalties++;
+			penaltyDollars += (positionVega - VEGA_LIMIT) * 100;
+		}
+	}
+
 	@Override
 	public void newFill(int strike, int side, double price) {
 		//print header
-		log("Order cleared, price=" + price + ", strike=" + strike + ", direction=" + side + ".");
 		int asset = getAsset(strike);
-		volume[asset]++;
 		double sigma = calculateSigma(strike, price);
-		double spread = spreadFactor[asset] * sigma;
-		log("SIGMA: " + sigma + ", SIGMA ESTIMATION PRICE ERROR: " + sigmaEstimationError(strike, sigma, price) + ", SPREAD: " + spread);
+		double spread = calculateSpread(sigma, strike);
+		this.mostRecentPrice[asset] = price;
+		this.mostRecentSpread[asset] = spread;
+		log("Order cleared, price=" + FMT.format(price) + ", strike=" + strike + ", direction=" + side + "." + "SIGMA: " + FMT.format(sigma) + ", SIGMA ESTIMATION PRICE ERROR: " + FMT.format(sigmaEstimationError(strike, sigma, price)) + ", SPREAD: " + FMT.format(spread));
 
 		//calculate a rolling PnL
+		//FIFO basis
 		double sellPrice, buyPrice;
 		switch (side) {
 			case -1: // market sell -> we're buying
@@ -138,6 +312,7 @@ public class OptionsCaseSample extends AbstractOptionsCase implements OptionsInt
 				if (!negativeInventory.get(asset).isEmpty()) {
 					sellPrice = negativeInventory.get(asset).remove(0).doubleValue();
 					pnl += sellPrice - buyPrice;
+					log("PROFIT : " + FMT.format(sellPrice - buyPrice));
 				} else {
 					positiveInventory.get(asset).add(Double.valueOf(buyPrice));
 				}
@@ -147,60 +322,27 @@ public class OptionsCaseSample extends AbstractOptionsCase implements OptionsInt
 				if (!positiveInventory.get(asset).isEmpty()) {
 					buyPrice = positiveInventory.get(asset).remove(0).doubleValue();
 					pnl += sellPrice - buyPrice;
+					log("PROFIT : " + FMT.format(sellPrice - buyPrice));
 				} else {
 					negativeInventory.get(asset).add(Double.valueOf(sellPrice));
 				}
 				break;
-		}
-		bid[asset] = price - bidWeightForSpread[asset] * spread;
-		ask[asset] = price + (1 - bidWeightForSpread[asset]) * spread;
-		vega = 0;
-		for (int i = 0; i < NUMBER_STRIKES; i++) {
-			double sigmaForStrike = calculateSigma(getStrike(i), price);
-			double vegaForStrike = OptionsMathUtils.calculateVega(getStrike(i), sigmaForStrike);
-			vega += positiveInventory.get(i).size() * vegaForStrike;
-			vega -= negativeInventory.get(i).size() * vegaForStrike;
-		}
-		vega = Math.abs(vega);
-		if (vega >= VEGA_LIMIT) {
-			penalties++;
-			pnl -= 100 * (vega - VEGA_LIMIT);
+			default:
+				throw new RuntimeException("");
 		}
 
 		//make some adjustments
-		int inventoryCount = positiveInventory.get(asset).size() - negativeInventory.get(asset).size();
-		if (inventoryCount > 0) {
-			//too many market sell orders clearing --> we're buying too expensively --> decrease bid --> increase bidWeightForSpread
-			bidWeightForSpread[asset] = 0.5 + MARGINAL_WEIGHT_FOR_INVENTORY * inventoryCount;
-			log("Bid weight on asset " + asset + " increased to " + bidWeightForSpread[asset]);
-		} else if (inventoryCount < 0) {
-			//too many market buy orders clearing --> we're selling too cheaply --> increase ask --> decrease bidWeightForSpread
-			bidWeightForSpread[asset] = 0.5 + MARGINAL_WEIGHT_FOR_INVENTORY * inventoryCount;
-			log("Bid weight on asset " + asset + " decreased to " + bidWeightForSpread[asset]);
-		}
-		double vegaDiff = vega - OPTIMAL_VEGA;
-		if (vegaDiff > 0) {
-			//holding too much inventory --> increase spreadFactor (must raise our profits to compensate for higher risk)
-			//the higher our volume, the lower the spread
-			spreadFactor[asset] = OPTIMAL_SPREAD_FACTOR + MARGINAL_SPREAD_FOR_VEGA_DIFF * vegaDiff - MARGINAL_SPREAD_FOR_VOLUME * volume[asset] / totalTicks;
-			log("Spread factor on asset " + asset + " increased to " + spreadFactor[asset]);
-		} else if (vegaDiff < 0) {
-			//holding too little inventory --> decrease spreadFactor (must lower our profits to compensate for lower risk, increase bid to entice sellers, decrease ask to entice buyers)
-			//the higher our volume, the lower the spread
-			spreadFactor[asset] = OPTIMAL_SPREAD_FACTOR + MARGINAL_SPREAD_FOR_VEGA_DIFF * vegaDiff - MARGINAL_SPREAD_FOR_VOLUME * volume[asset] / totalTicks;
-			log("Spread factor on asset " + asset + " decreased to " + spreadFactor[asset]);
-		}
-
-		//print summary
-		String inventory = "";
+		clearingMeasure[asset].updateClearedMeasure(true);
 		for (int i = 0; i < NUMBER_STRIKES; i++) {
-			inventory += getStrike(i) + ": [";
-			inventory += positiveInventory.get(i).size() - negativeInventory.get(i).size();
-			inventory += "], ";
+			if (asset != i)
+				clearingMeasure[asset].updateClearedMeasure(false);
+			updateSpreadBidWeight(i);
+			updateBidAndAsk(i);
 		}
-		log("Inventory : " + inventory);
-		log("PNL : " + pnl);
-		log("Vega : " + vega + " < " + VEGA_LIMIT + "? (" + penalties + " penalties so far)");
+		updatePositionVega(sigma);
+		updatePenalties();
+
+		printSummary();
 	}
 
 	@Override
@@ -210,7 +352,6 @@ public class OptionsCaseSample extends AbstractOptionsCase implements OptionsInt
 		Quote quoteHundred = new Quote(100, bid[2], ask[2]);
 		Quote quoteHundredTen = new Quote(110, bid[3], ask[3]);
 		Quote quoteHundredTwenty = new Quote(120, bid[4], ask[4]);
-		totalTicks++;
 
 		return new QuoteList(quoteEighty, quoteNinety, quoteHundred, quoteHundredTen, quoteHundredTwenty);
 	}
@@ -218,16 +359,21 @@ public class OptionsCaseSample extends AbstractOptionsCase implements OptionsInt
 	@Override
 	public void noBrokerFills() {
 		log("No orders cleared.");
-		double vegaDiff = vega - OPTIMAL_VEGA;
+
+		//make some adjustments
 		for (int i = 0; i < NUMBER_STRIKES; i++) {
-			spreadFactor[i] = OPTIMAL_SPREAD_FACTOR + MARGINAL_SPREAD_FOR_VEGA_DIFF * vegaDiff - MARGINAL_SPREAD_FOR_VOLUME * volume[i] / totalTicks;
-			log("Spread factor on asset " + i + " increased to " + spreadFactor[i]);
+			clearingMeasure[i].updateClearedMeasure(false);
+			updateSpreadBidWeight(i);
+			updateBidAndAsk(i);
 		}
+		updatePenalties();
+
+		printSummary();
 	}
 
 	@Override
 	public void penaltyNotice(double amount) {
-		log("Penalty received in the amount of " + amount);
+		log("Penalty received in the amount of " + FMT.format(amount));
 	}
 
 	@Override
