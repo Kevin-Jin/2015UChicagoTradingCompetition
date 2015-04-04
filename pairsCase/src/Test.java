@@ -23,6 +23,7 @@ public class Test {
 			}
 		};
 		try (Scanner scan = new Scanner(new File("PairsRound1.csv"))) {
+			c.initializeAlgo(null);
 			c.currentSymbols(new Ticker[] { Ticker.HURON, Ticker.SUPERIOR });
 			for (int i = 0; i < 1001; i++) {
 				String[] line = scan.nextLine().split(",");
