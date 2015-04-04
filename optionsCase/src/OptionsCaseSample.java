@@ -17,15 +17,15 @@ import com.optionscity.freeway.api.IJobSetup;
  * 
  *
  * @author Nathan Ro
- * @author Embert Lin
  * @author Kevin Jin
+ * @author Embert Lin
  * @author Shrey Patel
  */
 public class OptionsCaseSample extends AbstractOptionsCase implements OptionsInterface {
 	private static final NumberFormat FMT = new DecimalFormat("0.00");
 
 	//some constants, defined by the case
-	private static final int TICKS = 4000;
+	private static final int ROUND_TICKS = 100;
 	private static final int NUMBER_STRIKES = 5;
 	private static final double VEGA_LIMIT = 5 * OptionsMathUtils.calculateVega(100, 0.3);
 	//some parameters
@@ -39,29 +39,33 @@ public class OptionsCaseSample extends AbstractOptionsCase implements OptionsInt
 	private static final double EPSILON_FOR_SIGMA = 1e-15;
 	/**
 	 * The first quotes will use this volatility.
+	 * THIS MAKES A HUGE DIFFERENCE.
 	 */
 	private static final double INITIAL_VOLATILITY = 0.3;
 	/**
 	 * The first quotes will use this bid:ask spread.
+	 * THIS MAKES A HUGE DIFFERENCE.
 	 */
-	private static final double INITIAL_SPREAD = 2;
+	private static final double INITIAL_SPREAD = 3;
 	/**
 	 * Higher excess short or long inventory -> higher velocity on bid-weight to incentivize brokers to trade with us in the opposite direction.
 	 */
-	private static final double MARGINAL_WEIGHT_VELOCITY_FOR_INVENTORY = 1.5;
+	private static final double MARGINAL_WEIGHT_VELOCITY_FOR_INVENTORY = .001;
 	/**
-	 * Bid-weight can decrease or increase by a maximum of 0.5 every tick.
+	 * Bid-weight can decrease or increase by a maximum of this amount every tick.
+	 * THIS MAKES A HUGE DIFFERENCE.
 	 */
-	private static final double MAX_WEIGHT_VELOCITY_MAGNITUDE = 0.1;
+	private static final double MAX_WEIGHT_VELOCITY_MAGNITUDE = 0.000073;
 	/**
 	 * > 1 means ask can fall below FV and bid can rise above FV.
 	 * = 0 means bid must be FV - 0.5 * spread and ask must be FV + 0.5 * spread.
 	 */
-	private static final double MAX_WEIGHT_DEVIATION = 4;
+	private static final double MAX_WEIGHT_DEVIATION = 2;
 	/**
 	 * Lower -> profit may decrease but more trades should clear.
+	 * THIS MAKES A HUGE DIFFERENCE.
 	 */
-	private static final double MIN_SPREAD = 0.01;
+	private static final double MIN_SPREAD = 5;
 	/**
 	 * Higher -> profit may increase but fewer trades should clear.
 	 */
@@ -78,8 +82,31 @@ public class OptionsCaseSample extends AbstractOptionsCase implements OptionsInt
 	 * We don't bother with vega in our spread calculation unless vega is greater
 	 * than 1. Otherwise, spread goes to infinity when we have no inventory.
 	 * Increase this value to start selling off faster as inventory grows.
+	 * THIS MAKES A HUGE DIFFERENCE.
 	 */
 	private static final double VEGA_CLAMP = 1;
+	/**
+	 * THIS MAKES A HUGE DIFFERENCE.
+	 */
+	private static final int MAX_NET_INVENTORY_MAGNITUDE = 2;
+	/**
+	 * THIS MAKES A HUGE DIFFERENCE.
+	 */
+	private static final int MAX_ASSET_INVENTORY_MAGNITUDE = 5;
+	private static final double[] MAX_PRICES = {
+		OptionsMathUtils.theoValue(getStrike(0), 0.501),
+		OptionsMathUtils.theoValue(getStrike(1), 0.501),
+		OptionsMathUtils.theoValue(getStrike(2), 0.501),
+		OptionsMathUtils.theoValue(getStrike(3), 0.501),
+		OptionsMathUtils.theoValue(getStrike(4), 0.501)
+	};
+	private static final double[] MIN_PRICES = {
+		OptionsMathUtils.theoValue(getStrike(0), 0.201),
+		OptionsMathUtils.theoValue(getStrike(1), 0.201),
+		OptionsMathUtils.theoValue(getStrike(2), 0.201),
+		OptionsMathUtils.theoValue(getStrike(3), 0.201),
+		OptionsMathUtils.theoValue(getStrike(4), 0.201)
+	};
 
 	private static class ClearingMeasure {
 		public int value;
@@ -111,12 +138,15 @@ public class OptionsCaseSample extends AbstractOptionsCase implements OptionsInt
 
 	// private IDB myDatabase;
 
-	private double pnl;
+	public double pnl;
 	private int penalties;
 	private double penaltyDollars;
 	private double positionVega;
 	private int tickNum;
 	private double recentSigma;
+	public double highestVega;
+	public int highestVegaTick;
+	public int cleared;
 
 	private ClearingMeasure[] clearingMeasure = new ClearingMeasure[NUMBER_STRIKES];
 	private final double[] bidWeightForSpreadVelocity = new double[NUMBER_STRIKES];
@@ -161,7 +191,8 @@ public class OptionsCaseSample extends AbstractOptionsCase implements OptionsInt
 				ask[i] = mostRecentPrice[i] + mostRecentSpread[i] * (1 - bidWeightForSpread[i]);
 				clearingMeasure[i] = new ClearingMeasure();
 			}
-			recentSigma = penaltyDollars = pnl = positionVega = penalties = tickNum = 0;
+			highestVega = recentSigma = penaltyDollars = pnl = positionVega = penalties = tickNum = 0;
+			highestVegaTick = -1;
 		}
 	}
 
@@ -260,7 +291,7 @@ public class OptionsCaseSample extends AbstractOptionsCase implements OptionsInt
 			//hitting too many bids and lifting too many asks means we could profit more and we need to make our options less attractive
 			* Math.max(1, clearingMeasure[getAsset(strike)].value)
 			//decrease our spread as we get closer to the end of the round
-			* (TICKS - (tickNum / 10)) / TICKS
+			* (ROUND_TICKS - (tickNum / 10)) / ROUND_TICKS
 			//higher risk on individual options means we need to increase spread
 			* calculateOptionRisk(vol, strike)
 			//higher risk on position means we need to decrease spread and unload FAST (weight this more heavily)
@@ -301,54 +332,40 @@ public class OptionsCaseSample extends AbstractOptionsCase implements OptionsInt
 			positionVega -= negativeInventory.get(i).size() * vegaForStrike;
 		}
 		positionVega = Math.abs(positionVega);
+		if (positionVega > highestVega) {
+			highestVega = positionVega;
+			highestVegaTick = tickNum;
+		}
 	}
 
 	private void updateBidAndAsk(int asset) {
-		bid[asset] = mostRecentPrice[asset] - bidWeightForSpread[asset] * mostRecentSpread[asset];
-		ask[asset] = mostRecentPrice[asset] + (1 - bidWeightForSpread[asset]) * mostRecentSpread[asset];
-		//maximum and minimum prices calculated with .2 as min sigma and .5 as max sigma
-		switch (asset) {
-			case 0:
-				bid[asset] = Math.max(21.9, Math.min(29.9, bid[asset]));
-				ask[asset] = Math.max(21.9, Math.min(29.9, ask[asset]));
-				break;
-			case 1:
-				bid[asset] = Math.max(14.2, Math.min(24.6, bid[asset]));
-				ask[asset] = Math.max(14.2, Math.min(24.6, ask[asset]));
-				break;
-			case 2:
-				bid[asset] = Math.max(8.4, Math.min(20.1, bid[asset]));
-				ask[asset] = Math.max(8.4, Math.min(20.1, ask[asset]));
-				break;
-			case 3:
-				bid[asset] = Math.max(4.6, Math.min(16.4, bid[asset]));
-				ask[asset] = Math.max(4.6, Math.min(16.4, ask[asset]));
-				break;
-			case 4:
-				bid[asset] = Math.max(2.3, Math.min(13.4, bid[asset]));
-				ask[asset] = Math.max(2.3, Math.min(13.4, ask[asset]));
-				break;
-		}
-
 		int netInventory = 0;
 		for (int i = 0; i < NUMBER_STRIKES; i++)
 			netInventory += positiveInventory.get(i).size() - negativeInventory.get(i).size();
-		boolean stopMarketBuys = (netInventory > 3);
-		boolean stopMarketSells = (netInventory < -3);
+		boolean stopMarketBuys = (netInventory > MAX_NET_INVENTORY_MAGNITUDE);
+		boolean stopMarketSells = (netInventory < -MAX_NET_INVENTORY_MAGNITUDE);
 		if (!stopMarketBuys && !positiveInventory.get(asset).isEmpty())
-			//stop buying when we have positive inventory and we're more than halfway through round, or if we have inventory of 2
-			stopMarketBuys = (tickNum > 50 || positiveInventory.get(asset).size() > 1);
+			//stop buying when we have positive inventory and we're more than three quarters through round, or if we have inventory of 2
+			stopMarketBuys = (positiveInventory.get(asset).size() > MAX_ASSET_INVENTORY_MAGNITUDE);
 		if (!stopMarketSells && !negativeInventory.get(asset).isEmpty())
-			//stop selling when we have negative inventory and we're more than halfway through round, or if we have inventory of -2
-			stopMarketSells = (tickNum > 50 || negativeInventory.get(asset).size() > 1);
+			//stop selling when we have negative inventory and we're more than three quarters through round, or if we have inventory of -2
+			stopMarketSells = (negativeInventory.get(asset).size() > MAX_ASSET_INVENTORY_MAGNITUDE);
 
 		if (stopMarketBuys) {
 			//don't take on any more market sells
 			bid[asset] = Double.NEGATIVE_INFINITY;
+		} else {
+			bid[asset] = Math.max(MIN_PRICES[asset], Math.min(MAX_PRICES[asset],
+				mostRecentPrice[asset] - bidWeightForSpread[asset] * mostRecentSpread[asset]
+			));
 		}
 		if (stopMarketSells) {
 			//don't take on any more market buys
 			ask[asset] = Double.POSITIVE_INFINITY;
+		} else {
+			ask[asset] = Math.max(MIN_PRICES[asset], Math.min(MAX_PRICES[asset],
+				mostRecentPrice[asset] + (1 - bidWeightForSpread[asset]) * mostRecentSpread[asset]
+			));
 		}
 	}
 
@@ -366,6 +383,7 @@ public class OptionsCaseSample extends AbstractOptionsCase implements OptionsInt
 		recentSigma = calculateSigma(strike, price);
 		mostRecentPrice[asset] = price;
 		mostRecentSpread[asset] = calculateSpread(recentSigma, strike);
+		cleared++;
 		log("Tick " + tickNum + ": Order cleared, strike=" + strike + ", price=" + FMT.format(price) + ", direction=" + side + ". " + "SIGMA: " + FMT.format(recentSigma) + ", SIGMA ESTIMATION PRICE ERROR: " + FMT.format(sigmaEstimationError(strike, recentSigma, price)));
 
 		//calculate a rolling PnL
@@ -399,8 +417,6 @@ public class OptionsCaseSample extends AbstractOptionsCase implements OptionsInt
 		//make some adjustments
 		clearingMeasure[asset].updateClearedMeasure(true);
 		for (int i = 0; i < NUMBER_STRIKES; i++) {
-			if (asset != i)
-				clearingMeasure[asset].updateClearedMeasure(false);
 			updateSpreadBidWeight(i, recentSigma);
 			mostRecentPrice[i] = OptionsMathUtils.theoValue(getStrike(i), recentSigma);
 			updateBidAndAsk(i);

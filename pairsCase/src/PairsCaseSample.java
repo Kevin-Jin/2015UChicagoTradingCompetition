@@ -23,14 +23,16 @@ import com.optionscity.freeway.api.IJobSetup;
  */
 public class PairsCaseSample extends AbstractPairsCase implements PairsInterface {
 	private static final int MINIMUM_CORRELATION_STAGE_TICKS = 30;
-	private static final int MAXIMUM_CORRELATION_STAGE_TICKS = 30;
+	private static final int MAXIMUM_CORRELATION_STAGE_TICKS = 100;
 
 	private static final int MAXIMUM_ABSOLUTE_CONTRACTS = 40;
 
-	private static final double TRIGGER_SIGNAL = 2;
-	private static final double CLOSE_SIGNAL = 0.6;
-	private static final int POSITION_CHANGE_ON_TRIGGER = 10;
+	private static final double TRIGGER_SIGNAL = 2.05;
+	private static final double CLOSE_SIGNAL = 0.3;
+	private static final int POSITION_CHANGE_ON_TRIGGER = 15;
 	private static final int POSITION_DOUBLE_DOWN_RATE = 5;
+
+	private static final int EMA_SHORT = 12, EMA_LONG = 26;
 
 	public static class LinearRegression {
 		private final int N;
@@ -171,13 +173,13 @@ public class PairsCaseSample extends AbstractPairsCase implements PairsInterface
 
 	private int orderNum;
 	private String prevDecision, prevSignal;
-	private int prevHoldingsHuron, prevHoldingsSuperior;
 	private double prevExpMa;
-	private double cashAndPnl;
 	private boolean beganTrading;
-	private int contractsSold;
+	public int prevHoldingsHuron, prevHoldingsSuperior;
+	public double cashAndPnl;
+	public int contractsSold;
 
-	private List<Double> returnsHuron = new ArrayList<Double>(), returnsSuperior = new ArrayList<Double>(), ratios = new ArrayList<Double>();
+	private List<Double> ratios = new ArrayList<Double>();
 
 	@Override
 	public void addVariables(IJobSetup setup) {
@@ -257,36 +259,28 @@ public class PairsCaseSample extends AbstractPairsCase implements PairsInterface
 		if (orderNum < MINIMUM_CORRELATION_STAGE_TICKS)
 			return orders;
 
-		final int SHORT_TERM = 12, LONG_TERM = 26;
 		/** column D */ double thisExpMa;
-		LinearRegression reg = new LinearRegression(returnsHuron, returnsSuperior);
 		if (!beganTrading) {
-			if (orderNum >= MAXIMUM_CORRELATION_STAGE_TICKS || reg.R2() >= 0.4) {
+			if (orderNum >= MAXIMUM_CORRELATION_STAGE_TICKS) {
 				beganTrading = true;
 				//initial exponential moving average is mean of ratios preceding this one
-				thisExpMa = getMean(ratios, ratios.size() - 1 - SHORT_TERM, ratios.size() - 1);
+				thisExpMa = getMean(ratios, ratios.size() - 1 - EMA_SHORT, ratios.size() - 1);
 			} else {
 				return orders;
 			}
 		} else {
-			thisExpMa = (ratio - prevExpMa) * 2 / (SHORT_TERM + 1) + prevExpMa;
+			thisExpMa = (ratio - prevExpMa) * 2 / (EMA_SHORT + 1) + prevExpMa;
 		}
 
-		/** column F */ double stdev = Math.sqrt(getVariance(ratios, ratios.size() - 1 - LONG_TERM - 2, ratios.size() - 1));
+		/** column F */ double stdev = Math.sqrt(getVariance(ratios, ratios.size() - 1 - EMA_LONG - 2, ratios.size() - 1));
 		/** column G */ double zScore = (ratio - thisExpMa) / stdev;
 		/** column H */ String buyOrSell;
-		int positionChangeHuron = 0, positionChangeSuperior = 0;
-		if (zScore > TRIGGER_SIGNAL && Math.abs(prevHoldingsHuron + positionChangeHuron + POSITION_CHANGE_ON_TRIGGER) + Math.abs(prevHoldingsSuperior + positionChangeSuperior - POSITION_CHANGE_ON_TRIGGER) <= MAXIMUM_ABSOLUTE_CONTRACTS) {
+		if (zScore > TRIGGER_SIGNAL)
 			buyOrSell = "sellY";
-			positionChangeHuron = POSITION_CHANGE_ON_TRIGGER;
-			positionChangeSuperior = -POSITION_CHANGE_ON_TRIGGER;
-		} else if (zScore < -TRIGGER_SIGNAL && Math.abs(prevHoldingsHuron + positionChangeHuron - POSITION_CHANGE_ON_TRIGGER) + Math.abs(prevHoldingsSuperior + positionChangeSuperior + POSITION_CHANGE_ON_TRIGGER) <= MAXIMUM_ABSOLUTE_CONTRACTS) {
+		else if (zScore < -TRIGGER_SIGNAL)
 			buyOrSell = "buyY";
-			positionChangeHuron = -POSITION_CHANGE_ON_TRIGGER;
-			positionChangeSuperior = POSITION_CHANGE_ON_TRIGGER;
-		} else {
+		else
 			buyOrSell = "";
-		}
 
 		/** column J */ String thisSignal;
 		if (("sellY".equals(prevDecision) || "sellhold".equals(prevSignal)) && zScore > CLOSE_SIGNAL)
@@ -301,33 +295,14 @@ public class PairsCaseSample extends AbstractPairsCase implements PairsInterface
 			thisSignal = "";
 
 		/** column L */ int thisDoubleDownHuron;
-		/*if (zScore > 3 && prevHoldingsHuron < 15)
-			thisDoubleDownHuron = 2 * POSITION_DOUBLE_DOWN_RATE;
-		else if (zScore > 2.5 && prevHoldingsHuron < 15)
-			thisDoubleDownHuron = 1 * POSITION_DOUBLE_DOWN_RATE;
-		else if (zScore < -3 && prevHoldingsHuron > -15)
-			thisDoubleDownHuron = -2 * POSITION_DOUBLE_DOWN_RATE;
-		else if (zScore < -2.5 && prevHoldingsHuron > -15)
-			thisDoubleDownHuron = -1 * POSITION_DOUBLE_DOWN_RATE;
-		else
-			thisDoubleDownHuron = 0;*/
 		int steps;
-		if (zScore > 2.5 && prevHoldingsHuron < 15)
+		if (zScore > TRIGGER_SIGNAL + 0.5 && prevHoldingsHuron <= 10)
 			steps = Math.min(2, (int) ((zScore - 2) / 0.5));
-		else if (zScore < -2.5 && prevHoldingsHuron > -15)
+		else if (zScore < -TRIGGER_SIGNAL - 0.5 && prevHoldingsHuron >= -10)
 			steps = -Math.min(2, (int) ((zScore - 2) / 0.5));
 		else
 			steps = 0;
-		/*while (Math.abs(prevHoldingsHuron + positionChangeHuron + steps * POSITION_DOUBLE_DOWN_RATE) + Math.abs(prevHoldingsSuperior + positionChangeSuperior) > MAXIMUM_ABSOLUTE_CONTRACTS) {
-			if (steps < 0)
-				steps++;
-			else if (steps > 0)
-				steps--;
-			else if (steps == 0)
-				break;
-		}*/
 		thisDoubleDownHuron = steps * POSITION_DOUBLE_DOWN_RATE;
-		positionChangeHuron += thisDoubleDownHuron;
 
 		/** column K */ int thisHoldingsHuron;
 		if ("sellY".equals(buyOrSell))
@@ -342,32 +317,13 @@ public class PairsCaseSample extends AbstractPairsCase implements PairsInterface
 			thisHoldingsHuron = 0;
 
 		/** column O */ int thisDoubleDownSuperior;
-		/*if (zScore > TRIGGER_SIGNAL + 2 * 0.5 && prevHoldingsSuperior <= 10)
-			thisDoubleDownSuperior = -2 * POSITION_DOUBLE_DOWN_RATE;
-		else if (zScore > TRIGGER_SIGNAL + 1 * 0.5 && prevHoldingsSuperior <= 10)
-			thisDoubleDownSuperior = -1 * POSITION_DOUBLE_DOWN_RATE;
-		else if (zScore < -TRIGGER_SIGNAL - 2 * 0.5 && prevHoldingsSuperior >= -10)
-			thisDoubleDownSuperior = 2 * POSITION_DOUBLE_DOWN_RATE;
-		else if (zScore < -TRIGGER_SIGNAL - 1 * 0.5 && prevHoldingsSuperior >= -10)
-			thisDoubleDownSuperior = 1 * POSITION_DOUBLE_DOWN_RATE;
-		else
-			thisDoubleDownSuperior = 0;*/
-		if (zScore > 2.5 && prevHoldingsSuperior < 15)
+		if (zScore > TRIGGER_SIGNAL + 0.5 && prevHoldingsSuperior <= 10)
 			steps = -Math.min(2, (int) ((zScore - 2) / 0.5));
-		else if (zScore < -2.5 && prevHoldingsSuperior > -15)
+		else if (zScore < -TRIGGER_SIGNAL - 0.5 && prevHoldingsSuperior >= -10)
 			steps = Math.min(2, (int) ((zScore - 2) / 0.5));
 		else
 			steps = 0;
-		/*while (Math.abs(prevHoldingsHuron + positionChangeHuron) + Math.abs(prevHoldingsSuperior + positionChangeSuperior + steps * POSITION_DOUBLE_DOWN_RATE) > MAXIMUM_ABSOLUTE_CONTRACTS) {
-			if (steps < 0)
-				steps++;
-			else if (steps > 0)
-				steps--;
-			else if (steps == 0)
-				break;
-		}*/
 		thisDoubleDownSuperior = steps * POSITION_DOUBLE_DOWN_RATE;
-		positionChangeSuperior += thisDoubleDownSuperior;
 
 		/** column N */ int thisHoldingsSuperior;
 		if ("sellY".equals(buyOrSell))
@@ -382,6 +338,18 @@ public class PairsCaseSample extends AbstractPairsCase implements PairsInterface
 			thisHoldingsSuperior = 0;
 
 		/** column Q */ int absoluteContracts = Math.abs(thisHoldingsHuron) + Math.abs(thisHoldingsSuperior);
+		int tooMany = absoluteContracts - MAXIMUM_ABSOLUTE_CONTRACTS;
+		if (tooMany > 0) {
+			if (thisHoldingsSuperior < 0) {
+				thisHoldingsSuperior += tooMany / 2;
+				thisHoldingsHuron -= tooMany / 2;
+			} else {
+				thisHoldingsSuperior -= tooMany / 2;
+				thisHoldingsHuron += tooMany / 2;
+			}
+			absoluteContracts = Math.abs(thisHoldingsHuron) + Math.abs(thisHoldingsSuperior);
+		}
+
 		/** column R */ int change = thisHoldingsHuron - prevHoldingsHuron;
 		/** column S */ double cashFlow = change * (priceSuperior - priceHuron);
 		/** column T */ cashAndPnl += cashFlow;
@@ -392,10 +360,8 @@ public class PairsCaseSample extends AbstractPairsCase implements PairsInterface
 		prevHoldingsHuron = thisHoldingsHuron;
 		prevHoldingsSuperior = thisHoldingsSuperior;
 		prevExpMa = thisExpMa;
-		if (absoluteContracts > MAXIMUM_ABSOLUTE_CONTRACTS)
-			throw new RuntimeException("contracts");
 
-		log(orderNum + 1 + " " + absoluteContracts + " " + thisHoldingsHuron + " " + thisHoldingsSuperior + " " + cashAndPnl + " " + (cashAndPnl - contractsSold / 2));
+		log("Tick " + (orderNum + 1) + ": huron holdings: " + thisHoldingsHuron + ", superior holdings: " + thisHoldingsSuperior + ", PnL: " + (cashAndPnl - contractsSold / 2) + ", bid:ask fee: " + contractsSold / 2);
 		orders[0].quantity = thisHoldingsHuron;
 		orders[1].quantity = thisHoldingsSuperior;
 		return orders;

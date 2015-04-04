@@ -37,9 +37,9 @@ public class Test {
 				System.out.println(s);
 			}
 		};
-		try (Scanner scan = new Scanner(new File("roSample.csv"))) {
+		try (Scanner scan = new Scanner(new File("case1SampleData.csv"))) {
 			c.initializeAlgo(null, null);
-			for (int i = 0; i < 4000; i++) {
+			for (int i = 0; i < 100; i++) {
 				QuoteList list = c.getCurrentQuotes();
 				String[] newest = scan.nextLine().split(",");
 				int direction = Integer.parseInt(newest[0]);
@@ -60,6 +60,7 @@ public class Test {
 						break;
 				}
 			}
+			System.out.println("\n\nPnL: " + c.pnl + ", highest vega: " + c.highestVega + " (at tick " + c.highestVegaTick + "), cleared: " + c.cleared);
 		}
 	}
 }
