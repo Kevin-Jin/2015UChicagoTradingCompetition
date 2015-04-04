@@ -21,6 +21,9 @@ import com.optionscity.freeway.api.IJobSetup;
  * @author Shrey Patel
  */
 public class PairsCaseSample extends AbstractPairsCase implements PairsInterface {
+	private static final int MINIMUM_CORRELATION_STAGE_TICKS = 30;
+	private static final int MAXIMUM_CORRELATION_STAGE_TICKS = 100;
+
 	public static class LinearRegression {
 		private final int N;
 		private final double alpha, beta;
@@ -162,6 +165,7 @@ public class PairsCaseSample extends AbstractPairsCase implements PairsInterface
 	private String prevDecision, prevSignal;
 	private int prevNetChangeHuron, prevNetChangeSuperior;
 	private double cashAndPnl;
+	private boolean tradingBegan;
 
 	private List<Double> returnsHuron = new ArrayList<Double>(), returnsSuperior = new ArrayList<Double>(), differences = new ArrayList<Double>();
 
@@ -174,33 +178,9 @@ public class PairsCaseSample extends AbstractPairsCase implements PairsInterface
 	public void initializeAlgo(IDB dataBase) {
 		String strategy = getStringVar("Strategy");
 		if (strategy.contains("one")) {
-			// do strategy one
+			tradingBegan = false;
 		}
 	}
-
-	/*private double getR(List<Double> data1, List<Double> data2) {
-		double result = 0;
-		double sum_sq_x = 0;
-		double sum_sq_y = 0;
-		double sum_coproduct = 0;
-		double mean_x = data1.get(0);
-		double mean_y = data2.get(0);
-		for (int i = 2; i < data1.size() + 1; i += 1) {
-			double sweep = Double.valueOf(i - 1) / i;
-			double delta_x = data1.get(i - 1) - mean_x;
-			double delta_y = data2.get(i - 1) - mean_y;
-			sum_sq_x += delta_x * delta_x * sweep;
-			sum_sq_y += delta_y * delta_y * sweep;
-			sum_coproduct += delta_x * delta_y * sweep;
-			mean_x += delta_x / i;
-			mean_y += delta_y / i;
-		}
-		double pop_sd_x = (double) Math.sqrt(sum_sq_x / data1.size());
-		double pop_sd_y = (double) Math.sqrt(sum_sq_y / data1.size());
-		double cov_x_y = sum_coproduct / data1.size();
-		result = cov_x_y / (pop_sd_x * pop_sd_y);
-		return result;
-	}*/
 
 	private double getMean(List<Double> data) {
 		double sum = 0.0;
@@ -261,18 +241,25 @@ public class PairsCaseSample extends AbstractPairsCase implements PairsInterface
 		/** column D */ double percentChangeSuperior = (priceSuperior - priceSuperiorYest) / priceSuperiorYest;
 		returnsHuron.add(Double.valueOf(percentChangeHuron));
 		returnsSuperior.add(Double.valueOf(percentChangeSuperior));
-		if (orderNum < 31)
+		assert MINIMUM_CORRELATION_STAGE_TICKS > 1;
+		if (orderNum < MINIMUM_CORRELATION_STAGE_TICKS + 1)
 			return orders;
 
 		LinearRegression reg = new LinearRegression(returnsHuron, returnsSuperior);
+		if (!tradingBegan)
+			if (orderNum >= MAXIMUM_CORRELATION_STAGE_TICKS || reg.R2() >= 0.4)
+				tradingBegan = true;
+			else
+				return orders;
+
 		/** column K */ double pred = reg.intercept() + percentChangeHuron * reg.slope();
 		/** column E */ double difference = Double.valueOf(percentChangeSuperior - pred);
 		differences.add(Double.valueOf(difference));
-		if (orderNum < 32)
+		if (orderNum < MINIMUM_CORRELATION_STAGE_TICKS + 2)
 			return orders;
 
 		/** column F */ double stdif = Math.sqrt(getVariance(differences));
-		/** column L */ double zScore = differences.get(differences.size() - 1).doubleValue() / stdif;
+		/** column L */ double zScore = difference / stdif;
 		/** column O */ String thisDecision;
 		if (zScore > 1.5)
 			thisDecision = "sellY";
@@ -354,7 +341,7 @@ public class PairsCaseSample extends AbstractPairsCase implements PairsInterface
 		prevNetChangeHuron = thisNetChangeHuron;
 		prevNetChangeSuperior = thisNetChangeSuperior;
 
-		System.out.println(orderNum + 1 + " " + thisNetChangeHuron + " " + thisNetChangeSuperior + " " + cashAndPnl);
+		log(orderNum + 1 + " " + thisNetChangeHuron + " " + thisNetChangeSuperior + " " + cashAndPnl);
 		orders[0].quantity = thisNetChangeHuron;
 		orders[1].quantity = thisNetChangeSuperior;
 		return orders;
