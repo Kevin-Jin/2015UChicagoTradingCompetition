@@ -1,12 +1,24 @@
+import java.util.Arrays;
+import java.util.Map;
+import java.util.concurrent.ConcurrentHashMap;
+
 import org.uchicago.index.core.AbstractIndexCase;
 import org.uchicago.index.core.IndexCase;
 
 import com.optionscity.freeway.api.IDB;
 import com.optionscity.freeway.api.IJobSetup;
 
+/**
+ * 
+ * @author Shrey Patel
+ * @author Nathan Ro
+ * @author Embert Lin
+ * @author Kevin Jin
+ */
 public class IndexCaseSample extends AbstractIndexCase implements IndexCase {
 	/* Personal latest copy of information */
 	private double[] my_portfolioWeights;
+	Map<Integer, boolean[]> timeMap = new ConcurrentHashMap<Integer, boolean[]>();
 
 	private double[] evenlyDistributeWeightsAcrossTradables(boolean[] tradables) {
 		// Help function that evenly divide weight across every tradable asset
@@ -45,18 +57,23 @@ public class IndexCaseSample extends AbstractIndexCase implements IndexCase {
 	@Override
 	public double[] updatePosition(int currentTime, double[] underlyingPrices, double indexValue) {
 		// This strategy ignores all price changes
+		if (timeMap.containsKey(currentTime)) {
+			// Time is up...need to redistribute or I'll get penalties!!!
+			boolean[] newTradables = timeMap.get(currentTime);
+			my_portfolioWeights = evenlyDistributeWeightsAcrossTradables(newTradables);
+		}
 		return my_portfolioWeights;
 	}
 
 	@Override
 	public void regulationAnnouncement(int currentTime, int timeTakeEffect, boolean[] tradables) {
-		// Update portfolio weights based on tradable assets
-		my_portfolioWeights = evenlyDistributeWeightsAcrossTradables(tradables);
+		// Set timer for new announcement
+		timeMap.put(timeTakeEffect, tradables);
 	}
 
 	@Override
 	public void penaltyNotification(int currentTime, boolean[] tradables) {
-		// Do nothing - this also will not face any penalty
+		log("Penalty Notification!");
 	}
 
 	public IndexCase getImplementation() {

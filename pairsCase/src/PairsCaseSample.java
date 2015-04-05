@@ -1,4 +1,5 @@
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.Iterator;
 import java.util.List;
 
@@ -25,20 +26,25 @@ public class PairsCaseSample extends AbstractPairsCase implements PairsInterface
 	private static final int MINIMUM_CORRELATION_STAGE_TICKS = 30;
 	private static final int MAXIMUM_CORRELATION_STAGE_TICKS = 100;
 
-	private static final int MAXIMUM_ABSOLUTE_CONTRACTS = 40;
+	private static final int MAXIMUM_ABSOLUTE_CONTRACTS = 60;
 
 	private static final double TRIGGER_SIGNAL = 2.05;
 	private static final double CLOSE_SIGNAL = 0.3;
 	private static final int POSITION_CHANGE_ON_TRIGGER = 15;
 	private static final int POSITION_DOUBLE_DOWN_RATE = 5;
 
-	private static final int EMA_SHORT = 12, EMA_LONG = 26;
+	/**
+	 * 12, 26 for the first round.
+	 * 30, 30 for the second round.
+	 */
+	private static final int EMA_SHORT = 30, EMA_LONG = 30;
 
 	public static class LinearRegression {
 		private final int N;
 		private final double alpha, beta;
 		private final double R2;
 		private final double svar, svar0, svar1;
+		private final double correlation;
 
 		/**
 		 * Performs a linear regression on the data points <tt>(y[i], x[i])</tt>.
@@ -76,6 +82,7 @@ public class PairsCaseSample extends AbstractPairsCase implements PairsInterface
 			}
 			beta = xybar / xxbar;
 			alpha = ybar - beta * xbar;
+			correlation = (xybar / (N - 1)) / (Math.sqrt(yybar / (N - 1)) * Math.sqrt(xxbar / (N - 1)));
 
 			// more statistical analysis
 			double rss = 0.0; // residual sum of squares
@@ -110,6 +117,10 @@ public class PairsCaseSample extends AbstractPairsCase implements PairsInterface
 		 */
 		public double slope() {
 			return beta;
+		}
+
+		public double correlation() {
+			return correlation;
 		}
 
 		/**
@@ -162,6 +173,11 @@ public class PairsCaseSample extends AbstractPairsCase implements PairsInterface
 		}
 	}
 
+	private static class StockPair {
+		public double prevExpMa;
+		public final List<Double> ratios = new ArrayList<>();
+	}
+
 	//private IDB myDatabase;
 
 	// keeping track of the # of symbols for current round
@@ -169,17 +185,17 @@ public class PairsCaseSample extends AbstractPairsCase implements PairsInterface
 	// declare Order[] orders
 	private Order[] orders;
 	// variables to store current price information
-	private double priceHuron, priceSuperior, priceMichigan, priceOntario, priceErie;
+	private double[] currentPrices = new double[5];
+	private int[] prevHoldings = new int[5];
 
 	private int orderNum;
 	private String prevDecision, prevSignal;
-	private double prevExpMa;
+	private StockPair[][] pairs = new StockPair[4][5];
 	private boolean beganTrading;
-	public int prevHoldingsHuron, prevHoldingsSuperior;
 	public double cashAndPnl;
 	public int contractsSold;
 
-	private List<Double> ratios = new ArrayList<Double>();
+	private List<List<Double>> prices = new ArrayList<>();
 
 	@Override
 	public void addVariables(IJobSetup setup) {
@@ -191,6 +207,12 @@ public class PairsCaseSample extends AbstractPairsCase implements PairsInterface
 		String strategy = getStringVar("Strategy");
 		if (strategy.contains("one")) {
 			beganTrading = false;
+			for (int i = 0; i < 4; i++)
+				for (int j = i + 1; j < 5; j++)
+					pairs[i][j] = new StockPair();
+			prices = new ArrayList<>();
+			for (int i = 0; i < 5; i++)
+				prices.add(new ArrayList<Double>());
 		}
 	}
 
@@ -227,180 +249,238 @@ public class PairsCaseSample extends AbstractPairsCase implements PairsInterface
 
 	@Override
 	public Order[] getNewQuotes(Quote[] quotes) {
-		if (numSymbols == 2) {
-			double priceHuronYest = priceHuron;
-			double priceSuperiorYest = priceSuperior;
-			priceHuron = (quotes[0].bid + quotes[0].offer) / 2;
-			priceSuperior = (quotes[1].bid + quotes[1].offer) / 2;
-			return roundOneStrategy(priceHuronYest, priceSuperiorYest);
-		} else if (numSymbols == 3) {
-			priceHuron = (quotes[0].bid + quotes[0].offer) / 2;
-			priceSuperior = (quotes[1].bid + quotes[1].offer) / 2;
-			priceMichigan = (quotes[2].bid + quotes[2].offer) / 2;
-			return roundTwoStrategy(priceHuron, priceSuperior, priceMichigan);
-		} else {
-			priceHuron = (quotes[0].bid + quotes[0].offer) / 2;
-			priceSuperior = (quotes[1].bid + quotes[1].offer) / 2;
-			priceMichigan = quotes[2].bid;
-			priceOntario = quotes[3].bid;
-			priceErie = quotes[4].bid;
-			return roundThreeStrategy(priceHuron, priceSuperior, priceMichigan, priceOntario, priceErie);
+		double[] pricesYest = new double[numSymbols];
+		for (int i = 0; i < numSymbols; i++) {
+			pricesYest[i] = currentPrices[i];
+			currentPrices[i] = (quotes[i].bid + quotes[i].offer) / 2;
+			prices.get(i).add(Double.valueOf(currentPrices[i]));
 		}
+		return generateQuotes(pricesYest);
 	}
 
-	public Order[] roundOneStrategy(/** column A */ double priceHuronYest, /** column C */ double priceSuperiorYest) {
+	private void setPrevExpMa(int i, int j, double expMa) {
+		if (i < j)
+			pairs[i][j].prevExpMa = expMa;
+		else
+			pairs[j][i].prevExpMa = expMa;
+	}
+
+	private double getPrevExpMa(int i, int j) {
+		if (i < j)
+			return pairs[i][j].prevExpMa;
+		else
+			return pairs[j][i].prevExpMa;
+	}
+
+	private List<Double> getRatios(int i, int j) {
+		if (i < j)
+			return pairs[i][j].ratios;
+		else
+			return pairs[j][i].ratios;
+	}
+
+	private void addRatio(int i, int j, double r) {
+		getRatios(i, j).add(Double.valueOf(r));
+	}
+
+	//same result can be achieved in a combination instead of a permutation
+	public static Object[] permute(int n, int[] pair, int[] used, int maxPairs, int empty, Double[][] zScore) {
+		if (n == -1) {
+			int[][] coords = new int[maxPairs][];
+			int index = 0;
+			for (int i = 0; i < zScore.length - 1; i++)
+				for (int j = i + 1; j < zScore.length; j++)
+					if (zScore[i][j] != null) {
+						coords[index++] = new int[] { i, j };
+System.out.println(Arrays.toString(coords[index - 1]) + " " + index + "<" + maxPairs);
+					}
+			double sum = 0;
+			int[] found = new int[maxPairs];
+			for (int i = 0; i < pair.length; i++) {
+				if (pair[i] == 0 || used[pair[i] - 1] != 2)
+					continue;
+
+				int y = coords[pair[i] - 1][0];
+				int x = coords[pair[i] - 1][1];
+System.out.println(y + " " + x);
+				sum += Math.abs(zScore[y][x].doubleValue());
+				found[pair[i] - 1]++;
+			}
+System.out.println(Arrays.toString(pair) + " " + sum);
+			return new Object[] { Arrays.copyOf(pair, pair.length), sum };
+		}
+		Object[] best = null;
+		if (empty > 0) {
+			pair[n] = 0;
+			Object[] cur = permute(n - 1, pair, used, maxPairs, empty - 1, zScore);
+			if (best == null || (double) cur[1] > (double) best[1])
+				best = cur;
+		}
+		for (int j = 0; j < maxPairs; j++) {
+			if (used[j] < 2) {
+				pair[n] = j + 1;
+				used[j]++;
+				Object[] cur = permute(n - 1, pair, used, maxPairs, empty, zScore);
+				if (best == null || (double) cur[1] > (double) best[1])
+					best = cur;
+				used[j]--;
+			}
+		}
+		return best;
+	}
+
+	public Order[] generateQuotes(double[] pricesYest) {
+		LinearRegression[][] regs = new LinearRegression[numSymbols - 1][numSymbols];
+		for (int i = 0; i < numSymbols - 1; i++) {
+			for (int j = i + 1; j < numSymbols; j++) {
+				regs[i][j] = new LinearRegression(prices.get(i), prices.get(j));
+				addRatio(i, j, currentPrices[j] / currentPrices[i]);
+			}
+		}
+
 		orderNum++;
-		/** column C */ double ratio = priceSuperior / priceHuron;
-		ratios.add(Double.valueOf(ratio));
 		if (orderNum < 2)
 			return orders;
-
 		assert MINIMUM_CORRELATION_STAGE_TICKS > 1;
 		if (orderNum < MINIMUM_CORRELATION_STAGE_TICKS)
 			return orders;
 
+		/** column C */ double ratio;
 		/** column D */ double thisExpMa;
-		if (!beganTrading) {
-			if (orderNum >= MAXIMUM_CORRELATION_STAGE_TICKS) {
-				beganTrading = true;
-				//initial exponential moving average is mean of ratios preceding this one
-				thisExpMa = getMean(ratios, ratios.size() - 1 - EMA_SHORT, ratios.size() - 1);
-			} else {
-				return orders;
-			}
-		} else {
-			thisExpMa = (ratio - prevExpMa) * 2 / (EMA_SHORT + 1) + prevExpMa;
-		}
+		boolean wasTrading = beganTrading;
+		if (orderNum >= MAXIMUM_CORRELATION_STAGE_TICKS)
+			beganTrading = true;
+		else
+			return orders;
 
-		/** column F */ double stdev = Math.sqrt(getVariance(ratios, ratios.size() - 1 - EMA_LONG - 2, ratios.size() - 1));
-		/** column G */ double zScore = (ratio - thisExpMa) / stdev;
+		//if the ratio of the price of Y over the price of X diverges too much
+		//from the exponential moving average, then we expect the ratio to
+		//mean revert over time
+		double useZScore = 0;
+		int useX = -1, useY = -1;
+		Double[][] zScore = new Double[numSymbols - 1][numSymbols];
+		int validPairs = 0;
+		for (int i = 0; i < numSymbols - 1; i++) {
+			for (int j = i + 1; j < numSymbols; j++) {
+				ratio = currentPrices[j] / currentPrices[i];
+				if (!wasTrading) {
+					//initial exponential moving average is mean of ratios preceding this one
+					thisExpMa = getMean(getRatios(i, j), getRatios(i, j).size() - 1 - EMA_SHORT, getRatios(i, j).size() - 1);
+				} else {
+					thisExpMa = (ratio - getPrevExpMa(i, j)) * 2 / (EMA_SHORT + 1) + getPrevExpMa(i, j);
+				}
+				if (regs[i][j].correlation() > 0) {
+					/** column F */ double stdev = Math.sqrt(getVariance(getRatios(i, j), getRatios(i, j).size() - 1 - EMA_LONG - 2, getRatios(i, j).size() - 1));
+					/** column G */ zScore[i][j] = Double.valueOf((ratio - thisExpMa) / stdev);
+
+					validPairs++;
+					setPrevExpMa(i, j, thisExpMa);
+
+					if (Math.abs(zScore[i][j]) > Math.abs(useZScore)) {
+						useZScore = zScore[i][j];
+						useX = i;
+						useY = j;
+					}
+				} else {
+					
+				}
+			}
+		}
+		if (validPairs == 0)
+			return orders;
+
+		//int[] pair = (int[]) permute(numSymbols - 1, new int[numSymbols], new int[numSymbols], validPairs, numSymbols - validPairs, zScore)[0];
+
+		System.out.println("USING PAIR " + useX + ", " + useY);
 		/** column H */ String buyOrSell;
-		if (zScore > TRIGGER_SIGNAL)
+		if (useZScore > TRIGGER_SIGNAL)
 			buyOrSell = "sellY";
-		else if (zScore < -TRIGGER_SIGNAL)
+		else if (useZScore < -TRIGGER_SIGNAL)
 			buyOrSell = "buyY";
 		else
 			buyOrSell = "";
 
 		/** column J */ String thisSignal;
-		if (("sellY".equals(prevDecision) || "sellhold".equals(prevSignal)) && zScore > CLOSE_SIGNAL)
+		if (("sellY".equals(prevDecision) || "sellhold".equals(prevSignal)) && useZScore > CLOSE_SIGNAL)
 			thisSignal = "sellhold";
-		else if (("sellY".equals(prevDecision) || "sellhold".equals(prevSignal)) && zScore < CLOSE_SIGNAL)
+		else if (("sellY".equals(prevDecision) || "sellhold".equals(prevSignal)) && useZScore < CLOSE_SIGNAL)
 			thisSignal = "close";
-		else if (("buyY".equals(prevDecision) || "buyhold".equals(prevSignal)) && zScore < -CLOSE_SIGNAL)
+		else if (("buyY".equals(prevDecision) || "buyhold".equals(prevSignal)) && useZScore < -CLOSE_SIGNAL)
 			thisSignal = "buyhold";
-		else if (("buyY".equals(prevDecision) || "buyhold".equals(prevSignal)) && zScore > -CLOSE_SIGNAL)
+		else if (("buyY".equals(prevDecision) || "buyhold".equals(prevSignal)) && useZScore > -CLOSE_SIGNAL)
 			thisSignal = "close";
 		else
 			thisSignal = "";
 
-		/** column L */ int thisDoubleDownHuron;
+		/** column L */ int thisDoubleDownX;
 		int steps;
-		if (zScore > TRIGGER_SIGNAL + 0.5 && prevHoldingsHuron <= 10)
-			steps = Math.min(2, (int) ((zScore - 2) / 0.5));
-		else if (zScore < -TRIGGER_SIGNAL - 0.5 && prevHoldingsHuron >= -10)
-			steps = -Math.min(2, (int) ((zScore - 2) / 0.5));
+		if (useZScore > TRIGGER_SIGNAL + 0.5 && prevHoldings[useX] <= 10)
+			steps = Math.min(2, (int) ((useZScore - TRIGGER_SIGNAL) / 0.5));
+		else if (useZScore < -TRIGGER_SIGNAL - 0.5 && prevHoldings[useX] >= -10)
+			steps = -Math.min(2, (int) ((useZScore - TRIGGER_SIGNAL) / 0.5));
 		else
 			steps = 0;
-		thisDoubleDownHuron = steps * POSITION_DOUBLE_DOWN_RATE;
+		thisDoubleDownX = steps * POSITION_DOUBLE_DOWN_RATE;
 
-		/** column K */ int thisHoldingsHuron;
+		/** column K */ int thisHoldingsX;
 		if ("sellY".equals(buyOrSell))
-			thisHoldingsHuron = Math.max(POSITION_CHANGE_ON_TRIGGER + thisDoubleDownHuron, prevHoldingsHuron);
+			thisHoldingsX = Math.max(POSITION_CHANGE_ON_TRIGGER + thisDoubleDownX, prevHoldings[useX]);
 		else if ("buyY".equals(buyOrSell))
-			thisHoldingsHuron = Math.min(-POSITION_CHANGE_ON_TRIGGER + thisDoubleDownHuron, prevHoldingsHuron);
+			thisHoldingsX = Math.min(-POSITION_CHANGE_ON_TRIGGER + thisDoubleDownX, prevHoldings[useX]);
 		else if ("sellhold".equals(thisSignal))
-			thisHoldingsHuron = thisDoubleDownHuron + prevHoldingsHuron;
+			thisHoldingsX = thisDoubleDownX + prevHoldings[useX];
 		else if ("buyhold".equals(thisSignal))
-			thisHoldingsHuron = thisDoubleDownHuron + prevHoldingsHuron;
+			thisHoldingsX = thisDoubleDownX + prevHoldings[useX];
 		else
-			thisHoldingsHuron = 0;
+			thisHoldingsX = 0;
 
-		/** column O */ int thisDoubleDownSuperior;
-		if (zScore > TRIGGER_SIGNAL + 0.5 && prevHoldingsSuperior <= 10)
-			steps = -Math.min(2, (int) ((zScore - 2) / 0.5));
-		else if (zScore < -TRIGGER_SIGNAL - 0.5 && prevHoldingsSuperior >= -10)
-			steps = Math.min(2, (int) ((zScore - 2) / 0.5));
+		/** column O */ int thisDoubleDownY;
+		if (useZScore > TRIGGER_SIGNAL + 0.5 && prevHoldings[useY] <= 10)
+			steps = -Math.min(2, (int) ((useZScore - TRIGGER_SIGNAL) / 0.5));
+		else if (useZScore < -TRIGGER_SIGNAL - 0.5 && prevHoldings[useY] >= -10)
+			steps = Math.min(2, (int) ((useZScore - TRIGGER_SIGNAL) / 0.5));
 		else
 			steps = 0;
-		thisDoubleDownSuperior = steps * POSITION_DOUBLE_DOWN_RATE;
+		thisDoubleDownY = steps * POSITION_DOUBLE_DOWN_RATE;
 
-		/** column N */ int thisHoldingsSuperior;
+		/** column N */ int thisHoldingsY;
 		if ("sellY".equals(buyOrSell))
-			thisHoldingsSuperior = Math.min(-POSITION_CHANGE_ON_TRIGGER + thisDoubleDownSuperior, prevHoldingsSuperior);
+			thisHoldingsY = Math.min(-POSITION_CHANGE_ON_TRIGGER + thisDoubleDownY, prevHoldings[useY]);
 		else if ("buyY".equals(buyOrSell))
-			thisHoldingsSuperior = Math.max(POSITION_CHANGE_ON_TRIGGER + thisDoubleDownSuperior, prevHoldingsSuperior);
+			thisHoldingsY = Math.max(POSITION_CHANGE_ON_TRIGGER + thisDoubleDownY, prevHoldings[useY]);
 		else if ("sellhold".equals(thisSignal))
-			thisHoldingsSuperior = thisDoubleDownSuperior + prevHoldingsSuperior;
+			thisHoldingsY = thisDoubleDownY + prevHoldings[useY];
 		else if ("buyhold".equals(thisSignal))
-			thisHoldingsSuperior = thisDoubleDownSuperior + prevHoldingsSuperior;
+			thisHoldingsY = thisDoubleDownY + prevHoldings[useY];
 		else
-			thisHoldingsSuperior = 0;
+			thisHoldingsY = 0;
 
-		/** column Q */ int absoluteContracts = Math.abs(thisHoldingsHuron) + Math.abs(thisHoldingsSuperior);
+		/** column Q */ int absoluteContracts = Math.abs(thisHoldingsX) + Math.abs(thisHoldingsY);
 		int tooMany = absoluteContracts - MAXIMUM_ABSOLUTE_CONTRACTS;
 		if (tooMany > 0) {
-			if (thisHoldingsSuperior < 0) {
-				thisHoldingsSuperior += tooMany / 2;
-				thisHoldingsHuron -= tooMany / 2;
+			if (thisHoldingsY < 0) {
+				thisHoldingsY += tooMany / 2;
+				thisHoldingsX -= (tooMany + 1) / 2;
 			} else {
-				thisHoldingsSuperior -= tooMany / 2;
-				thisHoldingsHuron += tooMany / 2;
+				thisHoldingsY -= tooMany / 2;
+				thisHoldingsX += (tooMany + 1) / 2;
 			}
-			absoluteContracts = Math.abs(thisHoldingsHuron) + Math.abs(thisHoldingsSuperior);
+			absoluteContracts = Math.abs(thisHoldingsX) + Math.abs(thisHoldingsY);
 		}
 
-		/** column R */ int change = thisHoldingsHuron - prevHoldingsHuron;
-		/** column S */ double cashFlow = change * (priceSuperior - priceHuron);
+		/** column R */ int change = thisHoldingsX - prevHoldings[useX];
+		/** column S */ double cashFlow = change * (currentPrices[useY] - currentPrices[useX]);
 		/** column T */ cashAndPnl += cashFlow;
-		contractsSold += Math.abs(thisHoldingsHuron - prevHoldingsHuron) + Math.abs(thisHoldingsSuperior - prevHoldingsSuperior);
+		contractsSold += Math.abs(thisHoldingsX - prevHoldings[useX]) + Math.abs(thisHoldingsY - prevHoldings[useY]);
 
 		prevSignal = thisSignal;
 		prevDecision = buyOrSell;
-		prevHoldingsHuron = thisHoldingsHuron;
-		prevHoldingsSuperior = thisHoldingsSuperior;
-		prevExpMa = thisExpMa;
+		prevHoldings[useX] = thisHoldingsX;
+		prevHoldings[useY] = thisHoldingsY;
 
-		log("Tick " + (orderNum + 1) + ": huron holdings: " + thisHoldingsHuron + ", superior holdings: " + thisHoldingsSuperior + ", PnL: " + (cashAndPnl - contractsSold / 2) + ", bid:ask fee: " + contractsSold / 2);
-		orders[0].quantity = thisHoldingsHuron;
-		orders[1].quantity = thisHoldingsSuperior;
-		return orders;
-	}
-
-	// helper function that implements a dummy strategy for round 2
-	public Order[] roundTwoStrategy(double priceHuron, double priceSuperior, double priceMichigan) {
-		if (Math.abs(priceHuron - priceSuperior) > 5) {
-			if (priceHuron > priceSuperior) {
-				orders[0].quantity = -2;
-				orders[1].quantity = 2;
-				orders[2].quantity = 1;
-			} else {
-				orders[0].quantity = 2;
-				orders[1].quantity = -2;
-				orders[2].quantity = -1;
-			}
-			return orders;
-		} else if (Math.abs(priceHuron - priceSuperior) < 1) {
-			if (priceHuron > priceSuperior) {
-				orders[0].quantity = 2;
-				orders[1].quantity = -2;
-				orders[2].quantity = -1;
-			} else {
-				orders[0].quantity = -2;
-				orders[1].quantity = 2;
-				orders[2].quantity = 1;
-			}
-			return orders;
-		} else {
-			orders[0].quantity = 0;
-			orders[1].quantity = 0;
-			orders[2].quantity = 0;
-		}
-		return orders;
-	}
-
-	// helper function that implements a dummy strategy for round 2
-	public Order[] roundThreeStrategy(double priceHuron, double priceSuperior, double priceMichigan, double priceOntario, double priceErie) {
+		log("Tick " + (orderNum + 1) + ": " + useX + " holdings: " + thisHoldingsX + ", " + useY + " holdings: " + thisHoldingsY + ", PnL: " + (cashAndPnl - contractsSold / 2) + ", bid:ask fee: " + contractsSold / 2);
+		orders[useX].quantity = thisHoldingsX;
+		orders[useY].quantity = thisHoldingsY;
 		return orders;
 	}
 
@@ -409,10 +489,10 @@ public class PairsCaseSample extends AbstractPairsCase implements PairsInterface
 		for (Order o : orders) {
 			if (o.state != OrderState.FILLED) {
 				if (o.state == OrderState.REJECTED) {
-					log("My order for " + o.ticker + "is rejected, time to check my position/limit");
+					log("My order for " + o.ticker + " is rejected, time to check my position/limit");
 				}
 			} else {
-				log("My order for " + o.ticker + "is filled");
+				log("My order for " + o.ticker + " is filled");
 			}
 		}
 	}
