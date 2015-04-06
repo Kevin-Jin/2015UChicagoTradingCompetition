@@ -24,7 +24,7 @@ public class Test {
 	}
 
 	public static void main(String[] args) throws FileNotFoundException {
-		OptionsCaseSample c = new OptionsCaseSample() {
+		OptionsCaseNYU1 c = new OptionsCaseNYU1() {
 			@Override
 			public String getStringVar(String str) {
 				if (str.equals("Strategy"))

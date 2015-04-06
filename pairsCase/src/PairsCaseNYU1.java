@@ -1,4 +1,6 @@
 import java.util.ArrayList;
+import java.util.Arrays;
+import java.util.Collection;
 import java.util.Collections;
 import java.util.HashSet;
 import java.util.Iterator;
@@ -24,22 +26,37 @@ import com.optionscity.freeway.api.IJobSetup;
  * @author Kevin Jin
  * @author Shrey Patel
  */
-public class PairsCaseSample extends AbstractPairsCase implements PairsInterface {
-	private static final int MINIMUM_CORRELATION_STAGE_TICKS = 30;
-	private static final int MAXIMUM_CORRELATION_STAGE_TICKS = 100;
+public class PairsCaseNYU1 extends AbstractPairsCase implements PairsInterface {
+	private static int MINIMUM_CORRELATION_STAGE_TICKS = 30;
+	private static int MAXIMUM_CORRELATION_STAGE_TICKS = 40;
 
-	private static final int MAXIMUM_ABSOLUTE_CONTRACTS = 60;
+	/**
+	 * 40 for the first round.
+	 * 60 for the second round.
+	 * 100 for the third round.
+	 */
+	private static int MAXIMUM_ABSOLUTE_CONTRACTS = 100;
 
-	private static final double TRIGGER_SIGNAL = 2.05;
-	private static final double CLOSE_SIGNAL = 0.3;
-	private static final int POSITION_CHANGE_ON_TRIGGER = 15;
-	private static final int POSITION_DOUBLE_DOWN_RATE = 5;
+	private static double TRIGGER_SIGNAL = 2.05;
+	private static double CLOSE_SIGNAL = 0.3;
+	/**
+	 * 10 for the first round.
+	 * 15 for the second round.
+	 * 5 for the third round
+	 */
+	private static int POSITION_CHANGE_ON_TRIGGER = 5;
+	/**
+	 * 5 for the first round.
+	 * 5 for the second round.
+	 * 10 for the third round.
+	 */
+	private static int POSITION_DOUBLE_DOWN_RATE = 10;
 
 	/**
 	 * 12, 26 for the first round.
 	 * 30, 30 for the second round.
 	 */
-	private static final int EMA_SHORT = 30, EMA_LONG = 30;
+	private static int EMA_SHORT = 12, EMA_LONG = 26;
 
 	public static class LinearRegression {
 		private final int N;
@@ -180,6 +197,28 @@ public class PairsCaseSample extends AbstractPairsCase implements PairsInterface
 		public final List<Double> ratios = new ArrayList<>();
 	}
 
+	private static class ComparablePair {
+		public final int[] pair;
+
+		public ComparablePair(int a, int b) {
+			pair = new int[] { a, b };
+		}
+
+		@Override
+		public boolean equals(Object o) {
+			if (o instanceof ComparablePair) {
+				return Arrays.equals(((ComparablePair) o).pair, this.pair);
+			} else {
+				return false;
+			}
+		}
+
+		@Override
+		public int hashCode() {
+			return Arrays.hashCode(pair);
+		}
+	}
+
 	//private IDB myDatabase;
 
 	// keeping track of the # of symbols for current round
@@ -189,6 +228,7 @@ public class PairsCaseSample extends AbstractPairsCase implements PairsInterface
 	// variables to store current price information
 	private double[] currentPrices = new double[5];
 	private int[] prevHoldings = new int[5];
+	private Set<ComparablePair> pairsHeld = new HashSet<>();
 
 	private int orderNum;
 	private String prevDecision, prevSignal;
@@ -201,20 +241,118 @@ public class PairsCaseSample extends AbstractPairsCase implements PairsInterface
 
 	@Override
 	public void addVariables(IJobSetup setup) {
-		setup.addVariable("Strategy", "Strategy to use", "string", "one");
+		setup.addVariable("round", "defines the parameters to use (1 for round 1, 2 for round 2, 3 for round 3)", "int", "1");
+		setup.addVariable("POSITION_CHANGE_ON_TRIGGER_OVERRIDE", "", "string", "");
+		setup.addVariable("POSITION_DOUBLE_DOWN_RATE_OVERRIDE", "", "string", "");
+		setup.addVariable("EMA_SHORT_OVERRIDE", "", "string", "");
+		setup.addVariable("EMA_LONG_OVERRIDE", "", "string", "");
+		setup.addVariable("TRIGGER_SIGNAL_OVERRIDE", "", "string", "");
+		setup.addVariable("CLOSE_SIGNAL_OVERRIDE", "", "string", "");
+		setup.addVariable("MINIMUM_CORRELATION_STAGE_TICKS_OVERRIDE", "", "string", "");
+		setup.addVariable("MAXIMUM_CORRELATION_STAGE_TICKS_OVERRIDE", "", "string", "");
 	}
 
 	@Override
 	public void initializeAlgo(IDB dataBase) {
-		String strategy = getStringVar("Strategy");
-		if (strategy.contains("one")) {
-			beganTrading = false;
-			for (int i = 0; i < 4; i++)
-				for (int j = i + 1; j < 5; j++)
-					pairs[i][j] = new StockPair();
-			prices = new ArrayList<>();
-			for (int i = 0; i < 5; i++)
-				prices.add(new ArrayList<Double>());
+		beganTrading = false;
+		for (int i = 0; i < 4; i++)
+			for (int j = i + 1; j < 5; j++)
+				pairs[i][j] = new StockPair();
+		prices = new ArrayList<>();
+		for (int i = 0; i < 5; i++)
+			prices.add(new ArrayList<Double>());
+		switch (getIntVar("round")) {
+			case 1:
+				MAXIMUM_ABSOLUTE_CONTRACTS = 40;
+				POSITION_CHANGE_ON_TRIGGER = 10;
+				POSITION_DOUBLE_DOWN_RATE = 5;
+				EMA_SHORT = 12;
+				EMA_LONG = 26;
+				TRIGGER_SIGNAL = 2.05;
+				CLOSE_SIGNAL = 0.3;
+				break;
+			case 2:
+				MAXIMUM_ABSOLUTE_CONTRACTS = 60;
+				POSITION_CHANGE_ON_TRIGGER = 15;
+				POSITION_DOUBLE_DOWN_RATE = 5;
+				EMA_SHORT = 30;
+				EMA_LONG = 30;
+				TRIGGER_SIGNAL = 2.05;
+				CLOSE_SIGNAL = 0.3;
+				break;
+			case 3:
+				MAXIMUM_ABSOLUTE_CONTRACTS = 100;
+				POSITION_CHANGE_ON_TRIGGER = 10;
+				POSITION_DOUBLE_DOWN_RATE = 10;
+				EMA_SHORT = 12;
+				EMA_LONG = 26;
+				TRIGGER_SIGNAL = 2.5;
+				CLOSE_SIGNAL = 0.3;
+				break;
+		}
+		String val = getStringVar("MINIMUM_CORRELATION_STAGE_TICKS_OVERRIDE");
+		if (val != null && !val.trim().isEmpty()) {
+			try {
+				MINIMUM_CORRELATION_STAGE_TICKS = Integer.parseInt(val);
+			} catch (NumberFormatException e) {
+				log("MINIMUM_CORRELATION_STAGE_TICKS_OVERRIDE: " + e.toString());
+			}
+		}
+		val = getStringVar("MAXIMUM_CORRELATION_STAGE_TICKS_OVERRIDE");
+		if (val != null && !val.trim().isEmpty()) {
+			try {
+				MAXIMUM_CORRELATION_STAGE_TICKS = Integer.parseInt(val);
+			} catch (NumberFormatException e) {
+				log("MAXIMUM_CORRELATION_STAGE_TICKS_OVERRIDE: " + e.toString());
+			}
+		}
+		val = getStringVar("POSITION_CHANGE_ON_TRIGGER_OVERRIDE");
+		if (val != null && !val.trim().isEmpty()) {
+			try {
+				POSITION_CHANGE_ON_TRIGGER = Integer.parseInt(val);
+			} catch (NumberFormatException e) {
+				log("POSITION_CHANGE_ON_TRIGGER_OVERRIDE: " + e.toString());
+			}
+		}
+		val = getStringVar("POSITION_DOUBLE_DOWN_RATE_OVERRIDE");
+		if (val != null && !val.trim().isEmpty()) {
+			try {
+				POSITION_DOUBLE_DOWN_RATE = Integer.parseInt(val);
+			} catch (NumberFormatException e) {
+				log("POSITION_DOUBLE_DOWN_RATE_OVERRIDE: " + e.toString());
+			}
+		}
+		val = getStringVar("EMA_SHORT_OVERRIDE");
+		if (val != null && !val.trim().isEmpty()) {
+			try {
+				EMA_SHORT = Integer.parseInt(val);
+			} catch (NumberFormatException e) {
+				log("EMA_SHORT_OVERRIDE: " + e.toString());
+			}
+		}
+		val = getStringVar("EMA_LONG_OVERRIDE");
+		if (val != null && !val.trim().isEmpty()) {
+			try {
+				EMA_LONG = Integer.parseInt(val);
+			} catch (NumberFormatException e) {
+				log("EMA_LONG_OVERRIDE: " + e.toString());
+			}
+		}
+		val = getStringVar("TRIGGER_SIGNAL_OVERRIDE");
+		if (val != null && !val.trim().isEmpty()) {
+			try {
+				TRIGGER_SIGNAL = Double.parseDouble(val);
+			} catch (NumberFormatException e) {
+				log("TRIGGER_SIGNAL_OVERRIDE: " + e.toString());
+			}
+		}
+		val = getStringVar("CLOSE_SIGNAL_OVERRIDE");
+		if (val != null && !val.trim().isEmpty()) {
+			try {
+				CLOSE_SIGNAL = Double.parseDouble(val);
+			} catch (NumberFormatException e) {
+				log("CLOSE_SIGNAL_OVERRIDE: " + e.toString());
+			}
 		}
 	}
 
@@ -325,14 +463,23 @@ public class PairsCaseSample extends AbstractPairsCase implements PairsInterface
 	public static FindBestPairResult findBestPair(List<int[]> validPairs, int numTickers, double[][] zScores) {
 		FindBestPairResult bestResult = FindBestPairResult.NONE;
 		for (int i = 1; i <= numTickers / 2; i++) {
-			FindBestPairResult result = PairsCaseSample.findBestPair(validPairs, new ArrayList<int[]>(), 0, i, zScores);
+			FindBestPairResult result = PairsCaseNYU1.findBestPair(validPairs, new ArrayList<int[]>(), 0, i, zScores);
 			if (result.sumAbsoluteZScores > bestResult.sumAbsoluteZScores)
 				bestResult = result;
 		}
 		return bestResult;
 	}
 
+	private List<int[]> add(Collection<ComparablePair> a, List<int[]> b) {
+		List<int[]> c = new ArrayList<int[]>();
+		for (ComparablePair aEnt : a)
+			c.add(aEnt.pair);
+		c.addAll(b);
+		return c;
+	}
+
 	public Order[] generateQuotes(double[] pricesYest) {
+		log("Tick " + (orderNum + 1));
 		LinearRegression[][] regs = new LinearRegression[numSymbols - 1][numSymbols];
 		for (int i = 0; i < numSymbols - 1; i++) {
 			for (int j = i + 1; j < numSymbols; j++) {
@@ -370,21 +517,25 @@ public class PairsCaseSample extends AbstractPairsCase implements PairsInterface
 				} else {
 					thisExpMa = (ratio - getPrevExpMa(i, j)) * 2 / (EMA_SHORT + 1) + getPrevExpMa(i, j);
 				}
+				/** column F */ double stdev = Math.sqrt(getVariance(getRatios(i, j), getRatios(i, j).size() - 1 - EMA_LONG - 2, getRatios(i, j).size() - 1));
+				/** column G */ zScore[i][j] = (ratio - thisExpMa) / stdev;
 				if (regs[i][j].correlation() > 0) {
-					/** column F */ double stdev = Math.sqrt(getVariance(getRatios(i, j), getRatios(i, j).size() - 1 - EMA_LONG - 2, getRatios(i, j).size() - 1));
-					/** column G */ zScore[i][j] = (ratio - thisExpMa) / stdev;
-
-					validPairs.add(new int[] { i, j });
-					setPrevExpMa(i, j, thisExpMa);
+					boolean valid = true;
+					for (ComparablePair p : pairsHeld)
+						if (p.pair[0] == i || p.pair[1] == i || p.pair[0] == j || p.pair[1] == j)
+							valid = false;
+					if (valid)
+						validPairs.add(new int[] { i, j });
 				} else {
 					//TODO: negative correlation strategy doesn't work with price ratios
 				}
+				setPrevExpMa(i, j, thisExpMa);
 			}
 		}
-		if (validPairs.size() == 0)
+		if (validPairs.size() == 0 && pairsHeld.size() == 0)
 			return orders;
 
-		for (int[] pair : findBestPair(validPairs, numSymbols, zScore).combination) {
+		for (int[] pair : add(pairsHeld, findBestPair(validPairs, numSymbols, zScore).combination)) {
 			int useX = pair[0];
 			int useY = pair[1];
 			double useZScore = zScore[useX][useY];
@@ -412,9 +563,9 @@ public class PairsCaseSample extends AbstractPairsCase implements PairsInterface
 
 			/** column L */ int thisDoubleDownX;
 			int steps;
-			if (useZScore > TRIGGER_SIGNAL + 0.5 && prevHoldings[useX] <= 10)
+			if (useZScore > TRIGGER_SIGNAL + 0.5 && Math.abs(prevHoldings[useX]) <= POSITION_CHANGE_ON_TRIGGER)
 				steps = Math.min(2, (int) ((useZScore - TRIGGER_SIGNAL) / 0.5));
-			else if (useZScore < -TRIGGER_SIGNAL - 0.5 && prevHoldings[useX] >= -10)
+			else if (useZScore < -TRIGGER_SIGNAL - 0.5 && Math.abs(prevHoldings[useX]) <= POSITION_CHANGE_ON_TRIGGER)
 				steps = -Math.min(2, (int) ((useZScore - TRIGGER_SIGNAL) / 0.5));
 			else
 				steps = 0;
@@ -433,9 +584,9 @@ public class PairsCaseSample extends AbstractPairsCase implements PairsInterface
 				thisHoldingsX = 0;
 
 			/** column O */ int thisDoubleDownY;
-			if (useZScore > TRIGGER_SIGNAL + 0.5 && prevHoldings[useY] <= 10)
+			if (useZScore > TRIGGER_SIGNAL + 0.5 && Math.abs(prevHoldings[useY]) <= POSITION_CHANGE_ON_TRIGGER)
 				steps = -Math.min(2, (int) ((useZScore - TRIGGER_SIGNAL) / 0.5));
-			else if (useZScore < -TRIGGER_SIGNAL - 0.5 && prevHoldings[useY] >= -10)
+			else if (useZScore < -TRIGGER_SIGNAL - 0.5 && Math.abs(prevHoldings[useY]) <= POSITION_CHANGE_ON_TRIGGER)
 				steps = Math.min(2, (int) ((useZScore - TRIGGER_SIGNAL) / 0.5));
 			else
 				steps = 0;
@@ -476,9 +627,13 @@ public class PairsCaseSample extends AbstractPairsCase implements PairsInterface
 			prevHoldings[useX] = thisHoldingsX;
 			prevHoldings[useY] = thisHoldingsY;
 
-			log("Tick " + (orderNum + 1) + ": " + useX + " holdings: " + thisHoldingsX + ", " + useY + " holdings: " + thisHoldingsY + ", PnL: " + (cashAndPnl - contractsSold / 2) + ", bid:ask fee: " + contractsSold / 2);
-			orders[useX].quantity = thisHoldingsX;
-			orders[useY].quantity = thisHoldingsY;
+			log(useX + " holdings: " + thisHoldingsX + ", " + useY + " holdings: " + thisHoldingsY + ", PnL: " + (cashAndPnl - contractsSold / 2) + ", bid:ask fee: " + contractsSold / 2);
+			orders[useX].quantity = change;
+			orders[useY].quantity = -change;
+			if (thisHoldingsX != 0)
+				pairsHeld.add(new ComparablePair(useX, useY));
+			else
+				pairsHeld.remove(new ComparablePair(useX, useY));
 		}
 		return orders;
 	}

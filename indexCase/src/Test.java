@@ -144,9 +144,9 @@ public class Test {
 		}
 	}
 
-	private static double[] getWeights() throws FileNotFoundException {
+	private static double[] getWeights(int round) throws FileNotFoundException {
 		double[] weights = new double[30];
-		try (Scanner scan = new Scanner(new File("market-data/round1/capWeights.csv"))) {
+		try (Scanner scan = new Scanner(new File("market-data/round" + round + "/capWeights.csv"))) {
 			for (int i = 0; i < 30; i++)
 				weights[i] = scan.nextDouble();
 		}
@@ -154,6 +154,7 @@ public class Test {
 	}
 
 	//these are hardcoded based on historical data
+	@SuppressWarnings("unused")
 	private static int[][] findHighestCorrelating(int round) throws FileNotFoundException {
 		List<List<Double>> percentChanges = new ArrayList<>();
 		for (int i = 0; i < 30; i++)
@@ -204,12 +205,24 @@ public class Test {
 	}
 
 	public static void main(String[] args) throws FileNotFoundException {
-		IndexCaseSample c = new IndexCaseSample() {
+		/*int[][] correlationOrder = findHighestCorrelating(1);
+		System.out.println("BEGIN CORRELATION ORDER");
+		for (int i = 0; i < 30; i++) {
+			System.out.print("{");
+			for (int j = 0; j < 30; j++)
+				System.out.print(correlationOrder[i][j] + ",\t");
+			System.out.println("}");
+		}
+		System.out.println("END CORRELATION ORDER");*/
+
+		final int ROUND = 3;
+		double[] weights = getWeights(ROUND);
+		IndexCaseNYU1 c = new IndexCaseNYU1() {
 			@Override
-			public String getStringVar(String str) {
-				if (str.equals("Strategy"))
-					return "one";
-				return null;
+			public int getIntVar(String str) {
+				if (str.equals("round"))
+					return ROUND;
+				return -1;
 			}
 
 			@Override
@@ -217,39 +230,26 @@ public class Test {
 				System.out.println(s);
 			}
 		};
-		int[][] correlationOrder = findHighestCorrelating(1);
-		System.out.println("BEGIN CORRELATION ORDER");
-		for (int i = 0; i < 30; i++) {
-			System.out.print(i + 1 + ": {");
-			for (int j = 0; j < 30; j++)
-				System.out.print(correlationOrder[i][j] + 1 + ",\t");
-			System.out.println("}");
-		}
-		System.out.println("END CORRELATION ORDER");
-
-		double[] weights = getWeights();
 		double[][] oldNominals = new double[1000][30];
-		try (Scanner scan = new Scanner(new File("market-data/round1/prices.csv"))) {
+		try (Scanner scan = new Scanner(new File("market-data/round" + ROUND + "/prices.csv"))) {
 			scan.nextLine(); //skip headers line
 
 			for (int i = 0; i < oldNominals.length; i++) {
 				String[] line = scan.nextLine().split(",");
-				for (int j = 0; j < 30; j++) {
-					double price = Double.parseDouble(line[j]);
-					oldNominals[i][j] = price;
-				}
+				for (int j = 0; j < 30; j++)
+					oldNominals[i][j] = Double.parseDouble(line[j]);
 			}
 		}
 		double commission = 0.031399675;
 		boolean[] tradables = new boolean[30];
-		try (Scanner scan = new Scanner(new File("market-data/round1/tradable_init.csv"))) {
+		try (Scanner scan = new Scanner(new File("market-data/round" + ROUND + "/tradable_init.csv"))) {
 			for (int i = 0; i < 30; i++) {
 				int line = scan.nextInt();
 				tradables[i] = line == 1;
 			}
 		}
 		NavigableMap<Integer, int[]> tradableChanges = new TreeMap<>();
-		try (Scanner scan = new Scanner(new File("market-data/round1/tradable_changes.csv"))) {
+		try (Scanner scan = new Scanner(new File("market-data/round" + ROUND + "/tradable_changes.csv"))) {
 			while (scan.hasNext()) {
 				String[] line = scan.nextLine().split(",");
 				tradableChanges.put(Integer.valueOf(line[0]) - 1, new int[] { Integer.parseInt(line[1]), Integer.parseInt(line[2]) });
@@ -259,6 +259,7 @@ public class Test {
 		for (int j = 0; j < 30; j++)
 			index += oldNominals[0][j];
 		index *= (1 - commission);
+		c.initializeAlgo(null);
 		c.initalizePosition(oldNominals[0], index, weights, tradables);
 		for (int i = 1; i < oldNominals.length; i++) {
 			int[] change = tradableChanges.get(i);

@@ -21,7 +21,7 @@ import com.optionscity.freeway.api.IJobSetup;
  * @author Embert Lin
  * @author Shrey Patel
  */
-public class OptionsCaseSample extends AbstractOptionsCase implements OptionsInterface {
+public class OptionsCaseNYU1 extends AbstractOptionsCase implements OptionsInterface {
 	private static final NumberFormat FMT = new DecimalFormat("0.00");
 
 	//some constants, defined by the case
@@ -178,22 +178,22 @@ public class OptionsCaseSample extends AbstractOptionsCase implements OptionsInt
 		String strategy = getStringVar("Strategy");
 		if (strategy.contains("one")) {
 			// do strategy one
-			positiveInventory.clear();
-			negativeInventory.clear();
-			for (int i = 0; i < NUMBER_STRIKES; i++) {
-				positiveInventory.add(new LinkedList<Double>());
-				negativeInventory.add(new LinkedList<Double>());
-				mostRecentPrice[i] = OptionsMathUtils.theoValue(getStrike(i), INITIAL_VOLATILITY);
-				mostRecentSpread[i] = INITIAL_SPREAD;
-				bidWeightForSpreadVelocity[i] = 0;
-				bidWeightForSpread[i] = 0.5;
-				bid[i] = mostRecentPrice[i] - mostRecentSpread[i] * bidWeightForSpread[i];
-				ask[i] = mostRecentPrice[i] + mostRecentSpread[i] * (1 - bidWeightForSpread[i]);
-				clearingMeasure[i] = new ClearingMeasure();
-			}
-			highestVega = recentSigma = penaltyDollars = pnl = positionVega = penalties = tickNum = 0;
-			highestVegaTick = -1;
 		}
+		positiveInventory.clear();
+		negativeInventory.clear();
+		for (int i = 0; i < NUMBER_STRIKES; i++) {
+			positiveInventory.add(new LinkedList<Double>());
+			negativeInventory.add(new LinkedList<Double>());
+			mostRecentPrice[i] = OptionsMathUtils.theoValue(getStrike(i), INITIAL_VOLATILITY);
+			mostRecentSpread[i] = INITIAL_SPREAD;
+			bidWeightForSpreadVelocity[i] = 0;
+			bidWeightForSpread[i] = 0.5;
+			bid[i] = mostRecentPrice[i] - mostRecentSpread[i] * bidWeightForSpread[i];
+			ask[i] = mostRecentPrice[i] + mostRecentSpread[i] * (1 - bidWeightForSpread[i]);
+			clearingMeasure[i] = new ClearingMeasure();
+		}
+		highestVega = recentSigma = penaltyDollars = pnl = positionVega = penalties = tickNum = 0;
+		highestVegaTick = -1;
 	}
 
 	private static double sigmaEstimationError(double strike, double vol, double actual) {
