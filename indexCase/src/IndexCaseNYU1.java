@@ -162,8 +162,7 @@ public class IndexCaseNYU1 extends AbstractIndexCase implements IndexCase {
 		for (int j = 0; j < 30; j++) {
 			if (forbidden.contains(Integer.valueOf(j))) {
 				int sub;
-				for (sub = 0; forbidden.contains(Integer.valueOf(correlationOrder[j][sub])); sub++)
-					sub = correlationOrder[j][sub];
+				for (sub = 0; sub < 30 && forbidden.contains(Integer.valueOf(correlationOrder[j][sub])); sub++);
 				double ratio;
 				ratio = (lastPrices[j] * weights[j]) / (lastPrices[correlationOrder[j][sub]] * weights[correlationOrder[j][sub]]);
 				add[correlationOrder[j][sub]] = ratio;
@@ -178,7 +177,7 @@ public class IndexCaseNYU1 extends AbstractIndexCase implements IndexCase {
 		for (int j = 0; j < 30; j++)
 			my_portfolioWeights[j] = nominalValues[j] * underlyingPrices[j] * weights[j] / synthetic;
 		str += FMT.format(synthetic * (1 - commission)) + " " + FMT.format(actual * (1 - commission)) + " " + FMT.format((synthetic / actual - 1) * 100) + "%";
-		log(currentTime + " " + str);
+		log("Tick " + currentTime + " " + str);
 		lastPrices = Arrays.copyOf(underlyingPrices, 30);
 		return my_portfolioWeights;
 	}

@@ -479,6 +479,9 @@ public class PairsCaseNYU1 extends AbstractPairsCase implements PairsInterface {
 	}
 
 	public Order[] generateQuotes(double[] pricesYest) {
+		for (int i = 0; i < orders.length; i++)
+			orders[i].quantity = 0;
+
 		log("Tick " + (orderNum + 1));
 		LinearRegression[][] regs = new LinearRegression[numSymbols - 1][numSymbols];
 		for (int i = 0; i < numSymbols - 1; i++) {

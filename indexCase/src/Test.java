@@ -230,7 +230,7 @@ public class Test {
 				System.out.println(s);
 			}
 		};
-		double[][] oldNominals = new double[1000][30];
+		double[][] oldNominals = new double[10000][30];
 		try (Scanner scan = new Scanner(new File("market-data/round" + ROUND + "/prices.csv"))) {
 			scan.nextLine(); //skip headers line
 
